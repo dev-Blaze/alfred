@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Aide** — a native Android (Kotlin, Jetpack Compose) personal digital assistant app, targeting a single device (Galaxy S24 Ultra). It registers as the system Assistant so the device's assist shortcut shows a lightweight overlay (like Gemini) instead of opening an Activity, captures voice/photo/conversation input across 4 modes, and sends it to a user-configured n8n webhook for AI processing. Results that take a while arrive via notification.
 
-The full architecture and phased build plan live in `~/.claude/plans/scalable-juggling-dijkstra.md`.
+The full architecture and phased build plan live in a local Claude Code plan file (`~/.claude/plans/scalable-juggling-dijkstra.md` on the development machine — not part of this repo). References to "the plan file" throughout this document point there.
 
 ## Build / lint / test
 
