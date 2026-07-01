@@ -9,9 +9,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.dp
 import com.yshah.alfred.assistant.AssistantMode
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -28,8 +31,16 @@ fun ModeSwitcher(
                 selected = mode == activeMode,
                 onClick = { onModeSelected(mode) },
                 shape = SegmentedButtonDefaults.itemShape(index = index, count = modes.size),
-                icon = {},
-                label = { Icon(imageVector = iconFor(mode), contentDescription = labelFor(mode)) },
+                // Suppress the default selected-state checkmark so the mode icon always shows,
+                // with the mode name as a text label beside it.
+                icon = {
+                    Icon(
+                        imageVector = iconFor(mode),
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                },
+                label = { Text(labelFor(mode)) },
             )
         }
     }

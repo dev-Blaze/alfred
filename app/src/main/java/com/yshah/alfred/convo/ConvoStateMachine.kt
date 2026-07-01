@@ -5,6 +5,8 @@ import com.yshah.alfred.capture.CaptureState
 import com.yshah.alfred.capture.SpeechCaptureController
 import com.yshah.alfred.capture.TtsController
 import com.yshah.alfred.capture.TtsState
+import com.yshah.alfred.data.InteractionDao
+import com.yshah.alfred.data.InteractionEntity
 import com.yshah.alfred.network.WebhookClient
 import com.yshah.alfred.network.WebhookResult
 import kotlinx.coroutines.CoroutineScope
@@ -43,6 +45,7 @@ class ConvoStateMachine @Inject constructor(
     private val speechCaptureController: SpeechCaptureController,
     private val ttsController: TtsController,
     private val webhookClient: WebhookClient,
+    private val interactionDao: InteractionDao,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val _state = MutableStateFlow<ConvoState>(ConvoState.Idle)
@@ -104,7 +107,9 @@ class ConvoStateMachine @Inject constructor(
         }
         _state.value = ConvoState.Sending
         scope.launch {
-            when (val result = webhookClient.sendConvoTurn(text, sessionId)) {
+            val result = webhookClient.sendConvoTurn(text, sessionId)
+            recordTurn(text, result)
+            when (result) {
                 is WebhookResult.Success -> {
                     consecutiveErrors = 0
                     speak(result.response.responseText ?: result.response.message ?: "Okay.")
@@ -112,6 +117,30 @@ class ConvoStateMachine @Inject constructor(
                 else -> onTurnError("Sorry, that's taking too long.")
             }
         }
+    }
+
+    /**
+     * Each convo turn gets its own history row keyed by a fresh UUID — the conversation's
+     * [sessionId] stays constant across turns (for n8n correlation) so it can't double as the
+     * row's primary key without later turns overwriting earlier ones.
+     */
+    private suspend fun recordTurn(requestText: String, result: WebhookResult) {
+        val (status, responseText) = when (result) {
+            is WebhookResult.Success -> "success" to (result.response.responseText ?: result.response.message)
+            is WebhookResult.HttpError -> "http_error" to result.body
+            is WebhookResult.Timeout -> "timeout" to null
+            is WebhookResult.NetworkError -> "network_error" to result.throwable.message
+        }
+        interactionDao.upsert(
+            InteractionEntity(
+                sessionId = UUID.randomUUID().toString(),
+                type = "convo",
+                requestText = requestText,
+                timestamp = System.currentTimeMillis(),
+                status = status,
+                responseText = responseText,
+            ),
+        )
     }
 
     private fun speak(text: String) {
