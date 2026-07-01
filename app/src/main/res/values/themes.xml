@@ -16,10 +16,10 @@
         <item name="android:windowAnimationStyle">@null</item>
     </style>
 
-    <!-- Hosts the bottom-sheet-styled overlay content — translucent so only our own card is
-         visible, not an opaque full-screen window, over whatever app is underneath. Used by both
-         MainActivity (the primary invocation path) and AlfredVoiceInteractionSession (retained
-         infrastructure) — see the plan's "Samsung side button" finding for why there are two. -->
+    <!-- MainActivity's theme: translucent so only our own bottom-sheet card is visible, not an
+         opaque full-screen window, over whatever app is underneath. Both invocation paths (direct
+         launch and the VoiceInteractionSession) end up showing MainActivity — see the plan's
+         "Samsung side button" finding. -->
     <style name="Theme.Alfred.Overlay" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowIsTranslucent">true</item>
         <item name="android:windowBackground">@android:color/transparent</item>
