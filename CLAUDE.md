@@ -25,6 +25,10 @@ Gradle wrapper is pinned to **Gradle 9.6.1** (required by AGP 9.x). First invoca
 
 `local.properties` (gitignored) points `sdk.dir` at `~/Library/Android/sdk`, which has platforms up to `android-36.1` (Android 16) and build-tools up to `37.0.0`. `compileSdk`/`targetSdk` are pinned to 36 (the highest fully-installed platform) — bump if a newer platform is installed.
 
+### Release builds
+
+`./gradlew :app:assembleRelease` produces an R8-minified, resource-shrunk APK signed with `keystore/aide-release.jks` via `keystore.properties` (both gitignored — **back them up**; losing the keystore means future releases can't upgrade-install over installed ones). Release-signed APKs can't upgrade-install over debug builds (signature mismatch) — uninstall the debug build first. Releases are published as GitHub releases on `dev-Blaze/aide`.
+
 ### Gradle daemon memory
 
 `gradle.properties` sets `org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m` — the Gradle daemon's default heap in this environment (512 MiB) is too small and D8/dexing will OOM without this.

@@ -11,3 +11,5 @@ app/build/
 .kotlin/
 .claude/settings.local.json
 *.hprof
+/keystore/
+/keystore.properties
