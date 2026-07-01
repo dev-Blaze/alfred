@@ -2,14 +2,14 @@
 <resources>
     <!--
         Minimal platform theme only — real theming (colors, typography, dark mode) is done
-        entirely in Compose via AideTheme (ui/theme/Theme.kt). No Material Components (XML)
+        entirely in Compose via AlfredTheme (ui/theme/Theme.kt). No Material Components (XML)
         library dependency is needed since this app has no XML views.
     -->
-    <style name="Theme.Aide" parent="android:Theme.Material.NoActionBar" />
+    <style name="Theme.Alfred" parent="android:Theme.Material.NoActionBar" />
 
     <!-- AssistFallbackActivity should never actually be seen (it finishes immediately) — fully
          transparent/translucent so an unexpected launch doesn't flash an opaque screen. -->
-    <style name="Theme.Aide.Transparent" parent="android:Theme.Material.NoActionBar">
+    <style name="Theme.Alfred.Transparent" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowIsTranslucent">true</item>
         <item name="android:windowBackground">@android:color/transparent</item>
         <item name="android:windowNoTitle">true</item>
@@ -18,9 +18,9 @@
 
     <!-- Hosts the bottom-sheet-styled overlay content — translucent so only our own card is
          visible, not an opaque full-screen window, over whatever app is underneath. Used by both
-         MainActivity (the primary invocation path) and AideVoiceInteractionSession (retained
+         MainActivity (the primary invocation path) and AlfredVoiceInteractionSession (retained
          infrastructure) — see the plan's "Samsung side button" finding for why there are two. -->
-    <style name="Theme.Aide.Overlay" parent="android:Theme.Material.NoActionBar">
+    <style name="Theme.Alfred.Overlay" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowIsTranslucent">true</item>
         <item name="android:windowBackground">@android:color/transparent</item>
         <item name="android:windowNoTitle">true</item>

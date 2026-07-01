@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-**Aide** — a native Android (Kotlin, Jetpack Compose) personal digital assistant app, targeting a single device (Galaxy S24 Ultra). It registers as the system Assistant so the device's assist shortcut shows a lightweight overlay (like Gemini) instead of opening an Activity, captures voice/photo/conversation input across 4 modes, and sends it to a user-configured n8n webhook for AI processing. Results that take a while arrive via notification.
+**Alfred** — a native Android (Kotlin, Jetpack Compose) personal digital assistant app, targeting a single device (Galaxy S24 Ultra). It registers as the system Assistant so the device's assist shortcut shows a lightweight overlay (like Gemini) instead of opening an Activity, captures voice/photo/conversation input across 4 modes, and sends it to a user-configured n8n webhook for AI processing. Results that take a while arrive via notification.
 
 The full architecture and phased build plan live in a local Claude Code plan file (`~/.claude/plans/scalable-juggling-dijkstra.md` on the development machine — not part of this repo). References to "the plan file" throughout this document point there.
 
@@ -16,7 +16,7 @@ This is a single-module Gradle project (`:app`). Use the wrapper, not a system `
 ./gradlew :app:assembleDebug          # build a debug APK
 ./gradlew :app:installDebug           # build + install on a connected/USB-debugging device
 ./gradlew test                        # unit tests (JVM)
-./gradlew :app:testDebugUnitTest --tests "com.yshah.aide.SomeTest"   # single unit test
+./gradlew :app:testDebugUnitTest --tests "com.yshah.alfred.SomeTest"   # single unit test
 ./gradlew connectedDebugAndroidTest   # instrumented tests (requires a connected device)
 ./gradlew lint                        # Android Lint
 ```
@@ -27,7 +27,7 @@ Gradle wrapper is pinned to **Gradle 9.6.1** (required by AGP 9.x). First invoca
 
 ### Release builds
 
-`./gradlew :app:assembleRelease` produces an R8-minified, resource-shrunk APK signed with `keystore/aide-release.jks` via `keystore.properties` (both gitignored — **back them up**; losing the keystore means future releases can't upgrade-install over installed ones). Release-signed APKs can't upgrade-install over debug builds (signature mismatch) — uninstall the debug build first. Releases are published as GitHub releases on `dev-Blaze/aide`.
+`./gradlew :app:assembleRelease` produces an R8-minified, resource-shrunk APK signed with `keystore/alfred-release.jks` via `keystore.properties` (both gitignored — **back them up**; losing the keystore means future releases can't upgrade-install over installed ones). Release-signed APKs can't upgrade-install over debug builds (signature mismatch) — uninstall the debug build first. Releases are published as GitHub releases on `dev-Blaze/alfred`.
 
 ### Gradle daemon memory
 
@@ -39,18 +39,18 @@ Gradle wrapper is pinned to **Gradle 9.6.1** (required by AGP 9.x). First invoca
 - **Hilt Gradle plugin requires >= 2.59** to work with AGP 9's new DSL (`hilt = "2.59.2"` in the version catalog). Older Hilt throws `IllegalStateException: Android BaseExtension not found`.
 - **`kotlin-metadata-jvm` version must match the Kotlin compiler version** or KSP/Hilt annotation processing fails with `Provided Metadata instance has version X, while maximum supported version is Y`. `app/build.gradle.kts` forces `org.jetbrains.kotlin:kotlin-metadata-jvm` to the catalog's `kotlin` version via `resolutionStrategy`.
 - All exact library versions in `gradle/libs.versions.toml` were cross-checked against `./gradlew :app:lintDebug`'s live `GradleDependency` check on 2026-07-01 (it queries actual Maven metadata — more reliable than web search). Re-run lint before bumping further.
-- **Check each runtime permission independently, not just one as a proxy for "all granted."** A user who granted RECORD_AUDIO before POST_NOTIFICATIONS existed in the app would never be prompted for it, since the old code only gated the multi-permission request on RECORD_AUDIO's grant state. `AideOverlayScreen` now tracks each permission separately and requests exactly the missing ones.
+- **Check each runtime permission independently, not just one as a proxy for "all granted."** A user who granted RECORD_AUDIO before POST_NOTIFICATIONS existed in the app would never be prompted for it, since the old code only gated the multi-permission request on RECORD_AUDIO's grant state. `AlfredOverlayScreen` now tracks each permission separately and requests exactly the missing ones.
 - **`POST_NOTIFICATIONS` denial shows as `importance=NONE` in `adb shell dumpsys notification`**, and `numEnqueuedByApp` vs `numPostedByApp` in that same dump tells you whether your code actually called `notify()` (enqueued) vs whether the system displayed it (posted) — a fast way to tell "my code has a bug" from "permission is blocked" during on-device debugging.
 - **`SpeechRecognizer.createOnDeviceSpeechRecognizer()` is broken on this device for our use case** — confirmed via `adb logcat` that the on-device ("Soda") engine processes a full ~5s window and reports an empty result even with clear speech present (`#onStartOfSpeech` fires, immediately followed by `MIC_END_OF_DATA` and an empty hypothesis). `SpeechRecognizerCaptureController` now always uses the plain `SpeechRecognizer.createSpeechRecognizer(context)`, which resolves to Google's bundled recognition service and works reliably, but likely sends audio to Google's servers rather than staying on-device — a real privacy/connectivity trade-off from the original on-device-preferred design. Don't switch back to `createOnDeviceSpeechRecognizer()` without re-verifying against a real device first.
 - **n8n AI Agent nodes with streaming enabled return newline-delimited JSON events**, not one JSON object — `{"type":"begin"/"item"/"end", "content": ..., "metadata": {...}}` per token/node, and the actual answer is the *last* "item" event's `content`, which is itself often JSON-encoded again (e.g. `content: "{\"output\": \"...\"}"`). `WebhookClient.parseResponseBody` handles single-JSON, this NDJSON-stream shape, and a handful of common field names (`RESPONSE_TEXT_KEYS`) — don't replace this with a naive single `decodeFromString` call.
-- **n8n webhook responses can be empty or non-JSON** even with a "Respond to Webhook" node configured — confirmed against a real test webhook when the payload's `type` value didn't match any branch in the workflow's routing logic, so execution never reached the response node. `WebhookClient`'s `AideWebhookApi` therefore returns raw `Response<ResponseBody>`, not a typed body — `RetrofitWebhookClient.executeCall` parses the body leniently and treats any 2xx as `Success` even if the body is empty/unparseable. Don't revert to a typed Retrofit response converter for this API.
+- **n8n webhook responses can be empty or non-JSON** even with a "Respond to Webhook" node configured — confirmed against a real test webhook when the payload's `type` value didn't match any branch in the workflow's routing logic, so execution never reached the response node. `WebhookClient`'s `AlfredWebhookApi` therefore returns raw `Response<ResponseBody>`, not a typed body — `RetrofitWebhookClient.executeCall` parses the body leniently and treats any 2xx as `Success` even if the body is empty/unparseable. Don't revert to a typed Retrofit response converter for this API.
 - **compileSdk is capped at 36** because the locally installed Android SDK only has platforms up to `android-36.1` (no 37). Several newer library releases (`androidx.core:core-ktx` 1.19.0+, `androidx.lifecycle:*` 2.11.0+, `androidx.hilt:hilt-navigation-compose` 1.4.0+) require compileSdk 37 and were deliberately pinned to older versions to stay buildable — bump both together once platform 37 is installed (`sdkmanager "platforms;android-37"`, not attempted yet since no `cmdline-tools`/`sdkmanager` is installed locally either).
 
 ## Architecture
 
 ```
-app/src/main/java/com/yshah/aide/
-├── AideApplication.kt          # @HiltAndroidApp, creates the notification channel
+app/src/main/java/com/yshah/alfred/
+├── AlfredApplication.kt          # @HiltAndroidApp, creates the notification channel
 ├── MainActivity.kt              # primary overlay entry point (see Samsung side-button finding below)
 ├── assistant/                   # VoiceInteractionService/Session (retained infra) + AssistantMode enum (TASK/NOTE/CONVO)
 ├── capture/                     # SpeechCaptureController (SpeechRecognizer-backed), TtsController (Android TextToSpeech)
@@ -59,9 +59,9 @@ app/src/main/java/com/yshah/aide/
 ├── settings/                    # SecureSettingsStore (DataStore+Tink), SettingsScreen/Activity/ViewModel
 ├── prefs/                       # ModePreferences (last-selected mode, DataStore)
 ├── webhook/                     # WebhookForegroundService (background delivery + notification + history write)
-├── data/                        # Room: InteractionEntity/Dao/AideDatabase (interaction history)
+├── data/                        # Room: InteractionEntity/Dao/AlfredDatabase (interaction history)
 ├── history/                     # HistoryActivity/Screen/ViewModel — reachable from Settings and notification tap
-├── ui/                          # overlay screens (AideOverlayScreen/ViewModel), theme, shared components
+├── ui/                          # overlay screens (AlfredOverlayScreen/ViewModel), theme, shared components
 └── di/                          # Hilt modules
 ```
 

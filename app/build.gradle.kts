@@ -20,11 +20,11 @@ val keystoreProperties = Properties().apply {
 }
 
 android {
-    namespace = "com.yshah.aide"
+    namespace = "com.yshah.alfred"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.yshah.aide"
+        applicationId = "com.yshah.alfred"
         minSdk = 34
         targetSdk = 36
         versionCode = 1

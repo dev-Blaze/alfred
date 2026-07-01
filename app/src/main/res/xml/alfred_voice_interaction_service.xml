@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    recognitionService is required — confirmed on-device via `adb shell dumpsys voiceinteraction`
+    reporting "NOT VALID: No recognitionService specified" when omitted, even though nothing
+    actually routes recognition through AlfredRecognitionService (SpeechCaptureController, added
+    later, calls Android's SpeechRecognizer as a *client* instead — a separate concern).
+-->
+<voice-interaction-service
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:sessionService="com.yshah.alfred.assistant.AlfredSessionService"
+    android:recognitionService="com.yshah.alfred.assistant.AlfredRecognitionService"
+    android:supportsAssist="true"
+    android:supportsLaunchVoiceAssistFromKeyguard="true" />

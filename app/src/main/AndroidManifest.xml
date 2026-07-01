@@ -8,12 +8,12 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
-        android:name=".AideApplication"
+        android:name=".AlfredApplication"
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:label="@string/app_name"
-        android:theme="@style/Theme.Aide">
+        android:theme="@style/Theme.Alfred">
 
         <!-- This is what Samsung's side-button "Digital assistant app" gesture actually launches
              (it resolves the assistant package's normal launcher Activity) — see the plan's
@@ -21,7 +21,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:theme="@style/Theme.Aide.Overlay"
+            android:theme="@style/Theme.Alfred.Overlay"
             android:launchMode="singleTask"
             android:excludeFromRecents="true">
             <intent-filter>
@@ -33,19 +33,19 @@
         <activity
             android:name=".settings.SettingsActivity"
             android:exported="false"
-            android:theme="@style/Theme.Aide" />
+            android:theme="@style/Theme.Alfred" />
 
         <activity
             android:name=".history.HistoryActivity"
             android:exported="false"
-            android:theme="@style/Theme.Aide" />
+            android:theme="@style/Theme.Alfred" />
 
         <!-- Carries the ASSIST intent filter only so RoleManager/OEM pickers recognize this app
              as assistant-capable. Never actually launched with real content — see class doc. -->
         <activity
             android:name=".assistant.AssistFallbackActivity"
             android:exported="true"
-            android:theme="@style/Theme.Aide.Transparent"
+            android:theme="@style/Theme.Alfred.Transparent"
             android:excludeFromRecents="true"
             android:noHistory="true">
             <intent-filter>
@@ -55,7 +55,7 @@
         </activity>
 
         <service
-            android:name=".assistant.AideVoiceInteractionService"
+            android:name=".assistant.AlfredVoiceInteractionService"
             android:exported="true"
             android:label="@string/app_name"
             android:permission="android.permission.BIND_VOICE_INTERACTION">
@@ -64,18 +64,18 @@
             </intent-filter>
             <meta-data
                 android:name="android.voice_interaction"
-                android:resource="@xml/aide_voice_interaction_service" />
+                android:resource="@xml/alfred_voice_interaction_service" />
         </service>
 
         <service
-            android:name=".assistant.AideSessionService"
+            android:name=".assistant.AlfredSessionService"
             android:exported="true"
             android:permission="android.permission.BIND_VOICE_INTERACTION" />
 
         <!-- Satisfies the voice-interaction-service's recognitionService requirement — see
-             AideRecognitionService's class doc for why this is a stub, not real recognition. -->
+             AlfredRecognitionService's class doc for why this is a stub, not real recognition. -->
         <service
-            android:name=".assistant.AideRecognitionService"
+            android:name=".assistant.AlfredRecognitionService"
             android:exported="true"
             android:permission="android.permission.BIND_RECOGNITION_SERVICE">
             <intent-filter>
