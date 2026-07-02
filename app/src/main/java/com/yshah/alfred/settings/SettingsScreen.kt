@@ -114,6 +114,12 @@ fun SettingsScreen(
             }
 
             HorizontalDivider()
+            Text("Assistant voice", style = MaterialTheme.typography.titleMedium)
+            OutlinedButton(onClick = viewModel::onPreviewVoice) {
+                Text("Preview voice")
+            }
+
+            HorizontalDivider()
             BatteryOptimizationRow()
 
             HorizontalDivider()

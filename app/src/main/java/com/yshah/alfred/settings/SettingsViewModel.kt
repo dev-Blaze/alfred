@@ -2,6 +2,7 @@ package com.yshah.alfred.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.yshah.alfred.capture.TtsController
 import com.yshah.alfred.network.ConnectionTestResult
 import com.yshah.alfred.network.WebhookClient
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -26,6 +27,7 @@ data class SettingsUiState(
 class SettingsViewModel @Inject constructor(
     private val settingsStore: SecureSettingsStore,
     private val webhookClient: WebhookClient,
+    private val ttsController: TtsController,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SettingsUiState())
@@ -74,6 +76,10 @@ class SettingsViewModel @Inject constructor(
             val result = webhookClient.testConnection()
             _uiState.value = _uiState.value.copy(isTestingConnection = false, testResult = result)
         }
+    }
+
+    fun onPreviewVoice() {
+        ttsController.speak("Good evening. Alfred at your service — how may I help?")
     }
 
     private suspend fun persistCurrentState() {

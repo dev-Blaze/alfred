@@ -28,14 +28,15 @@ interface TtsController {
 private const val TAG = "AlfredTts"
 
 // Android exposes no gender API on Voice, so a male voice can only be picked by name. These are
-// the Google-TTS voice-name fragments commonly seen for male English voices, British first to fit
-// Alfred's butler persona. Best-effort and engine-version-dependent — selection falls back to the
-// locale default if none match. Refine against the actual on-device voice list (logged at init).
+// Google-TTS male English voice-name fragments, British first for Alfred's butler persona.
+// en-gb-x-gbb was confirmed male on-device (Galaxy S24 Ultra); the rest are the other
+// widely-attested male Google voices, kept as fallbacks. Selection falls back to the locale
+// default if none match.
 private val MALE_VOICE_NAME_HINTS = listOf(
     // en-GB (British) male
-    "en-gb-x-gbb", "en-gb-x-rjs", "en-gb-x-gbd",
+    "en-gb-x-gbb", "en-gb-x-rjs",
     // en-US male
-    "en-us-x-iom", "en-us-x-iog", "en-us-x-sfg", "en-us-x-tpd",
+    "en-us-x-iom", "en-us-x-iog", "en-us-x-iob",
 )
 
 class AndroidTtsController(context: Context) : TtsController {
@@ -88,7 +89,6 @@ class AndroidTtsController(context: Context) : TtsController {
 
         val voices = runCatching { tts.voices?.toList() }.getOrNull().orEmpty()
             .filter { it.locale.language == Locale.ENGLISH.language }
-        logVoices(voices)
 
         val chosen = pickMaleVoice(voices, locale)
         if (chosen != null) {
@@ -101,28 +101,22 @@ class AndroidTtsController(context: Context) : TtsController {
 
     private fun pickMaleVoice(voices: List<Voice>, preferredLocale: Locale): Voice? {
         if (voices.isEmpty()) return null
-        val maleHintMatches = voices.filter { voice ->
-            MALE_VOICE_NAME_HINTS.any { hint -> voice.name.lowercase().contains(hint) }
-        }
+        fun hintPriority(voice: Voice): Int =
+            MALE_VOICE_NAME_HINTS.indexOfFirst { hint -> voice.name.lowercase().contains(hint) }
+        val maleHintMatches = voices.filter { hintPriority(it) >= 0 }
         if (maleHintMatches.isEmpty()) return null
         // Prefer the requested locale (British), then on-device (non-network) for latency, then
-        // the engine's own quality ranking.
+        // the hint list's own order (so gbb wins over rjs), then quality, then name — the last two
+        // purely to make selection deterministic, since Android's voice set has no stable order.
         return maleHintMatches.minWithOrNull(
             compareBy(
                 { if (it.locale.country == preferredLocale.country) 0 else 1 },
                 { if (it.isNetworkConnectionRequired) 1 else 0 },
+                { hintPriority(it) },
                 { -it.quality },
+                { it.name },
             ),
         )
-    }
-
-    // One-time enumeration so the exact male voice can be locked in against a real device — this
-    // is diagnostic and can be dropped once a voice is confirmed on-device.
-    private fun logVoices(voices: List<Voice>) {
-        Log.i(TAG, "Available English voices (${voices.size}):")
-        voices.forEach { v ->
-            Log.i(TAG, "  ${v.name} locale=${v.locale} network=${v.isNetworkConnectionRequired} quality=${v.quality}")
-        }
     }
 
     override fun speak(text: String, utteranceId: String) {
