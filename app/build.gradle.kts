@@ -98,6 +98,8 @@ dependencies {
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
 
+    implementation(libs.play.services.wearable)
+
     // CameraX deps removed along with Camera mode — see the plan's "Camera mode deferred" note.
     // Catalog entries (androidx-camera-*) are kept for when it's re-added.
 

@@ -91,6 +91,23 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <!-- Receives Task/Note captures relayed from the Wear OS companion app (alfred-companion,
+             a separate repo) over the Data Layer API. Path-filtered per Google's post-8.2.0
+             guidance (plain BIND_LISTENER is deprecated/lint-failing — it wakes the app for every
+             wearable event with no filtering). The <data> element is mandatory: omitting it means
+             this service is never called at all, not called for everything. -->
+        <service
+            android:name=".wear.AlfredWearableListenerService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.DATA_CHANGED" />
+                <data
+                    android:scheme="wear"
+                    android:host="*"
+                    android:pathPrefix="/alfred/capture" />
+            </intent-filter>
+        </service>
+
     </application>
 
 </manifest>
