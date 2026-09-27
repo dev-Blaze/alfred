@@ -5,6 +5,8 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice
 import android.util.Log
+import android.os.Handler
+import android.os.Looper
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.util.Locale
@@ -21,11 +23,24 @@ interface TtsController {
     val state: StateFlow<TtsState>
     fun speak(text: String, utteranceId: String = UUID.randomUUID().toString())
 
-    /** Barge-in primitive — interrupts speech mid-utterance, firing onStop -> Done. */
+    /** Barge-in primitive — interrupts speech and invalidates pending callbacks. */
     fun stop()
 }
 
 private const val TAG = "AlfredTts"
+
+internal fun speechChunks(text: String, maxLength: Int): List<String> {
+    require(maxLength >= 2)
+    val chunks = mutableListOf<String>()
+    var start = 0
+    while (start < text.length) {
+        var end = minOf(start + maxLength, text.length)
+        if (end < text.length && text[end - 1].isHighSurrogate() && text[end].isLowSurrogate()) end--
+        chunks += text.substring(start, end)
+        start = end
+    }
+    return chunks
+}
 
 // Android exposes no gender API on Voice, so a male voice can only be picked by name. These are
 // Google-TTS male English voice-name fragments, British first for Alfred's butler persona.
@@ -43,12 +58,59 @@ class AndroidTtsController(context: Context) : TtsController {
 
     private val _state = MutableStateFlow<TtsState>(TtsState.Idle)
     override val state: StateFlow<TtsState> = _state
+    private val utteranceLock = Any()
+    private var activeUtteranceId: String? = null
+    private val handler = Handler(Looper.getMainLooper())
+    private var ready = false
+    private var initializationFailed = false
+    private var pendingText: String? = null
+    private var chunkIds = emptyList<String>()
+    private val startupTimeout = Runnable {
+        synchronized(utteranceLock) {
+            if (!ready) {
+                initializationFailed = true
+                activeUtteranceId?.let { fail(it) }
+            }
+        }
+    }
+
+    private fun fail(id: String) {
+        activeUtteranceId = null
+        pendingText = null
+        chunkIds = emptyList()
+        _state.value = TtsState.Error(id)
+    }
+
+    private fun complete(utteranceId: String?, failed: Boolean = false) {
+        synchronized(utteranceLock) {
+            val id = activeUtteranceId ?: return
+            if (utteranceId == null || utteranceId !in chunkIds) return
+            if (failed) {
+                fail(id)
+                handler.post { tts.stop() }
+                return
+            }
+            if (utteranceId != chunkIds.last()) return
+            activeUtteranceId = null
+            chunkIds = emptyList()
+            _state.value = TtsState.Done(id)
+        }
+    }
 
     // The init callback fires asynchronously once the engine is ready, by which point `tts` is
     // already assigned — safe despite referencing it inside its own initializer's lambda.
     private val tts: TextToSpeech = TextToSpeech(context) { status ->
-        if (status == TextToSpeech.SUCCESS) {
-            configureVoice()
+        handler.post {
+            synchronized(utteranceLock) {
+                handler.removeCallbacks(startupTimeout)
+                ready = status == TextToSpeech.SUCCESS
+                initializationFailed = !ready
+                if (ready) runCatching { configureVoice() }
+                val id = activeUtteranceId
+                if (id != null) {
+                    if (ready) submit(pendingText.orEmpty(), id) else fail(id)
+                }
+            }
         }
     }
 
@@ -56,20 +118,20 @@ class AndroidTtsController(context: Context) : TtsController {
         tts.setOnUtteranceProgressListener(
             object : UtteranceProgressListener() {
                 override fun onStart(utteranceId: String?) {
-                    _state.value = TtsState.Speaking(utteranceId.orEmpty())
+                    // speak() publishes Speaking before submitting to the engine.
                 }
 
                 override fun onDone(utteranceId: String?) {
-                    _state.value = TtsState.Done(utteranceId.orEmpty())
+                    complete(utteranceId)
                 }
 
                 override fun onStop(utteranceId: String?, interrupted: Boolean) {
-                    _state.value = TtsState.Done(utteranceId.orEmpty())
+                    complete(utteranceId, failed = true)
                 }
 
                 @Deprecated("Deprecated in Java")
                 override fun onError(utteranceId: String?) {
-                    _state.value = TtsState.Error(utteranceId.orEmpty())
+                    complete(utteranceId, failed = true)
                 }
             },
         )
@@ -120,11 +182,52 @@ class AndroidTtsController(context: Context) : TtsController {
     }
 
     override fun speak(text: String, utteranceId: String) {
-        // QUEUE_FLUSH — convo mode should never queue a stale response behind a new one.
-        tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+        synchronized(utteranceLock) {
+            chunkIds = emptyList()
+            tts.stop()
+            activeUtteranceId = utteranceId
+            _state.value = TtsState.Speaking(utteranceId)
+            when {
+                initializationFailed -> fail(utteranceId)
+                ready -> submit(text, utteranceId)
+                else -> {
+                    pendingText = text
+                    handler.removeCallbacks(startupTimeout)
+                    handler.postDelayed(startupTimeout, 15_000L)
+                }
+            }
+        }
+    }
+
+    private fun submit(text: String, utteranceId: String) {
+        pendingText = null
+        val chunks = speechChunks(text, TextToSpeech.getMaxSpeechInputLength())
+        if (chunks.isEmpty()) {
+            fail(utteranceId)
+            return
+        }
+        val token = UUID.randomUUID().toString()
+        chunkIds = chunks.indices.map { "$token:$it" }
+        for ((index, chunk) in chunks.withIndex()) {
+            val result = runCatching {
+                tts.speak(chunk, if (index == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, chunkIds[index])
+            }.getOrDefault(TextToSpeech.ERROR)
+            if (result == TextToSpeech.ERROR) {
+                fail(utteranceId)
+                tts.stop()
+                return
+            }
+        }
     }
 
     override fun stop() {
+        synchronized(utteranceLock) {
+            activeUtteranceId = null
+            pendingText = null
+            chunkIds = emptyList()
+            handler.removeCallbacks(startupTimeout)
+            _state.value = TtsState.Idle
+        }
         tts.stop()
     }
 }

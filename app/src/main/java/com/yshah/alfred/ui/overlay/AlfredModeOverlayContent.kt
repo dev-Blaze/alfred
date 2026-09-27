@@ -17,11 +17,15 @@ import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.yshah.alfred.assistant.AssistantMode
 import com.yshah.alfred.capture.CaptureState
@@ -39,6 +43,12 @@ fun AlfredModeOverlayContent(
     onOpenSettings: () -> Unit,
     onMicTapped: () -> Unit,
     onEndConversation: () -> Unit,
+    draftText: String? = null,
+    isEnqueuing: Boolean = false,
+    deliveryError: String? = null,
+    onDraftChanged: (String) -> Unit = {},
+    onSendDraft: () -> Unit = {},
+    onCancelDraft: () -> Unit = {},
 ) {
     OverlayScrimCard(onScrimClick = onScrimClick) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -53,7 +63,19 @@ fun AlfredModeOverlayContent(
         Spacer(modifier = Modifier.height(12.dp))
         ModeSwitcher(activeMode = activeMode, onModeSelected = onModeSelected, modifier = Modifier.fillMaxWidth())
         Spacer(modifier = Modifier.height(20.dp))
-        when (activeMode) {
+        if (draftText != null) {
+            OutlinedTextField(value = draftText, onValueChange = onDraftChanged,
+                label = { Text("Review captured text") }, enabled = !isEnqueuing,
+                modifier = Modifier.fillMaxWidth(), minLines = 2, maxLines = 6)
+            deliveryError?.let { Text(it, color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }) }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onSendDraft, enabled = !isEnqueuing && draftText.isNotBlank()) {
+                    Text(if (isEnqueuing) "Saving…" else if (deliveryError != null) "Retry" else "Send")
+                }
+                TextButton(onClick = onCancelDraft, enabled = !isEnqueuing) { Text("Cancel") }
+            }
+        } else when (activeMode) {
             AssistantMode.TASK -> VoiceCaptureContent(
                 captureState = captureState,
                 showStopButton = false,
@@ -132,6 +154,7 @@ private fun ConvoModeContent(
             }
             is ConvoState.Error -> {
                 Text(text = convoState.message, color = MaterialTheme.colorScheme.error)
+                Button(onClick = onMicTapped) { Text("Retry") }
             }
         }
         if (convoState !is ConvoState.Idle && convoState !is ConvoState.Ended) {

@@ -56,9 +56,11 @@ fun AlfredOverlayScreen(
         captureState = uiState.captureState,
         convoState = uiState.convoState,
         onModeSelected = viewModel::onModeSelected,
-        onScrimClick = onDismiss,
+        onScrimClick = { if (!uiState.isEnqueuing) onDismiss() },
         onOpenSettings = onOpenSettings,
         onMicTapped = {
+            hasRecordAudio = isGranted(Manifest.permission.RECORD_AUDIO)
+            hasNotifications = isGranted(Manifest.permission.POST_NOTIFICATIONS)
             if (hasRecordAudio && hasNotifications) {
                 viewModel.onMicTapped()
             } else {
@@ -70,5 +72,11 @@ fun AlfredOverlayScreen(
             }
         },
         onEndConversation = viewModel::onEndConversation,
+        draftText = uiState.draftText,
+        isEnqueuing = uiState.isEnqueuing,
+        deliveryError = uiState.deliveryError,
+        onDraftChanged = viewModel::onDraftChanged,
+        onSendDraft = viewModel::onSendDraft,
+        onCancelDraft = viewModel::onCancelDraft,
     )
 }

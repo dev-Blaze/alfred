@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 import java.util.UUID
 import javax.inject.Inject
 
@@ -29,6 +30,9 @@ data class OverlayUiState(
     val captureState: CaptureState = CaptureState.Idle,
     val convoState: ConvoState = ConvoState.Idle,
     val shouldDismiss: Boolean = false,
+    val draftText: String? = null,
+    val isEnqueuing: Boolean = false,
+    val deliveryError: String? = null,
 )
 
 @HiltViewModel
@@ -45,7 +49,10 @@ class AlfredOverlayViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(activeMode = modePreferences.lastMode.first())
+            try {
+                _uiState.value = _uiState.value.copy(activeMode = modePreferences.lastMode.first())
+            } catch (e: CancellationException) { throw e
+            } catch (_: Exception) { /* The default mode remains usable. */ }
         }
         viewModelScope.launch {
             speechCaptureController.state.collect { captureState ->
@@ -53,7 +60,7 @@ class AlfredOverlayViewModel @Inject constructor(
                 if (_uiState.value.activeMode == AssistantMode.CONVO) return@collect
                 _uiState.value = _uiState.value.copy(captureState = captureState)
                 if (captureState is CaptureState.Finished) {
-                    handOffCapturedText(captureState.finalText)
+                    _uiState.value = _uiState.value.copy(draftText = captureState.finalText.takeIf { it.isNotBlank() })
                 }
             }
         }
@@ -65,6 +72,7 @@ class AlfredOverlayViewModel @Inject constructor(
     }
 
     fun onModeSelected(mode: AssistantMode) {
+        if (_uiState.value.isEnqueuing || _uiState.value.draftText != null) return
         speechCaptureController.cancel()
         if (_uiState.value.activeMode == AssistantMode.CONVO && mode != AssistantMode.CONVO) {
             convoStateMachine.endConversation()
@@ -74,10 +82,15 @@ class AlfredOverlayViewModel @Inject constructor(
             captureState = CaptureState.Idle,
             convoState = ConvoState.Idle,
         )
-        viewModelScope.launch { modePreferences.setLastMode(mode) }
+        viewModelScope.launch {
+            try { modePreferences.setLastMode(mode) }
+            catch (e: CancellationException) { throw e }
+            catch (_: Exception) { /* Selection still works for this session. */ }
+        }
     }
 
     fun onMicTapped() {
+        if (_uiState.value.isEnqueuing || _uiState.value.draftText != null) return
         val current = _uiState.value
         if (current.activeMode == AssistantMode.CONVO) {
             onConvoMicTapped()
@@ -98,8 +111,10 @@ class AlfredOverlayViewModel @Inject constructor(
      * through a whole task/note/turn only to fail at the very end for a missing webhook URL. */
     private fun startCaptureIfConfigured(mode: AssistantMode) {
         viewModelScope.launch {
-            if (secureSettingsStore.currentSettingsSnapshot().webhookUrl.isBlank()) {
-                _uiState.value = _uiState.value.copy(captureState = CaptureState.Error(-1, NO_WEBHOOK_MESSAGE))
+            val error = configurationError()
+            if (_uiState.value.activeMode != mode) return@launch
+            if (error != null) {
+                _uiState.value = _uiState.value.copy(captureState = CaptureState.Error(-1, error))
                 return@launch
             }
             val captureMode = if (mode == AssistantMode.TASK) CaptureMode.AUTO_STOP else CaptureMode.MANUAL_STOP
@@ -109,10 +124,12 @@ class AlfredOverlayViewModel @Inject constructor(
 
     private fun onConvoMicTapped() {
         when (_uiState.value.convoState) {
-            is ConvoState.Idle, is ConvoState.Ended -> {
+            is ConvoState.Idle, is ConvoState.Ended, is ConvoState.Error -> {
                 viewModelScope.launch {
-                    if (secureSettingsStore.currentSettingsSnapshot().webhookUrl.isBlank()) {
-                        _uiState.value = _uiState.value.copy(convoState = ConvoState.Error(NO_WEBHOOK_MESSAGE))
+                    val error = configurationError()
+                    if (_uiState.value.activeMode != AssistantMode.CONVO) return@launch
+                    if (error != null) {
+                        _uiState.value = _uiState.value.copy(convoState = ConvoState.Error(error))
                         return@launch
                     }
                     convoStateMachine.startConversation()
@@ -130,25 +147,43 @@ class AlfredOverlayViewModel @Inject constructor(
     /** Called when the user denies RECORD_AUDIO/POST_NOTIFICATIONS — surfaces guidance instead of
      * silently doing nothing, since a repeated system prompt won't show once denied. */
     fun onCapturePermissionDenied() {
+        val message = "Enable microphone access in Settings > Apps > Alfred > Permissions, then retry"
         _uiState.value = _uiState.value.copy(
-            captureState = CaptureState.Error(-1, "Enable microphone access in Settings > Apps > Alfred > Permissions"),
+            captureState = CaptureState.Error(-1, message),
+            convoState = ConvoState.Error(message),
         )
     }
 
-    /**
-     * Fires the webhook off to WebhookForegroundService — started here, while the overlay is
-     * still visible, so the background-service start is covered by the visible-transition
-     * exemption (see the plan's foreground-service note) — then dismisses immediately. The
-     * result arrives later as a notification, not inline in the overlay.
-     */
-    private fun handOffCapturedText(text: String) {
-        if (text.isBlank()) {
-            _uiState.value = _uiState.value.copy(captureState = CaptureState.Idle)
-            return
-        }
+    private suspend fun configurationError(): String? = try {
+        if (secureSettingsStore.currentSettingsSnapshot().webhookUrl.isBlank()) NO_WEBHOOK_MESSAGE else null
+    } catch (e: CancellationException) { throw e
+    } catch (_: Exception) { "Could not read webhook settings. Open Settings to check them, then retry." }
+
+    fun onDraftChanged(text: String) {
+        if (!_uiState.value.isEnqueuing) _uiState.value = _uiState.value.copy(draftText = text, deliveryError = null)
+    }
+
+    fun onCancelDraft() {
+        if (_uiState.value.isEnqueuing) return
+        speechCaptureController.cancel()
+        _uiState.value = _uiState.value.copy(draftText = null, deliveryError = null, captureState = CaptureState.Idle)
+    }
+
+    fun onSendDraft() {
+        if (_uiState.value.isEnqueuing) return
+        val text = _uiState.value.draftText?.trim()?.takeIf { it.isNotEmpty() } ?: return
         val type = if (_uiState.value.activeMode == AssistantMode.TASK) "task" else "note"
-        WebhookForegroundService.start(appContext, text = text, type = type, sessionId = UUID.randomUUID().toString())
-        _uiState.value = _uiState.value.copy(captureState = CaptureState.Idle, shouldDismiss = true)
+        _uiState.value = _uiState.value.copy(isEnqueuing = true, deliveryError = null)
+        viewModelScope.launch {
+            try {
+                WebhookForegroundService.enqueue(appContext, text = text, type = type, sessionId = UUID.randomUUID().toString())
+                _uiState.value = _uiState.value.copy(isEnqueuing = false, shouldDismiss = true)
+            } catch (e: CancellationException) { throw e
+            } catch (_: Exception) {
+                _uiState.value = _uiState.value.copy(isEnqueuing = false,
+                    deliveryError = "Could not save for delivery. Your text is still here. Check device storage and retry.")
+            }
+        }
     }
 
     override fun onCleared() {

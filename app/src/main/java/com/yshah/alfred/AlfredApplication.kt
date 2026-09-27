@@ -18,5 +18,6 @@ class AlfredApplication : Application() {
             description = "Task/note delivery status from Alfred's n8n webhook"
         }
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        com.yshah.alfred.webhook.DeliveryQueue.schedule(this)
     }
 }

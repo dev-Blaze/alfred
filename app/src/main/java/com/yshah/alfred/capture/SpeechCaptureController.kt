@@ -8,7 +8,7 @@ sealed class CaptureState {
     data object Idle : CaptureState()
     data object Listening : CaptureState()
     data class PartialTranscript(val text: String) : CaptureState()
-    data class Finished(val finalText: String) : CaptureState()
+    data class Finished(val finalText: String, val requiresReview: Boolean = false) : CaptureState()
     data class Error(val code: Int, val message: String) : CaptureState()
 }
 

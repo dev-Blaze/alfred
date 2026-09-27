@@ -9,12 +9,19 @@ import com.yshah.alfred.data.InteractionDao
 import com.yshah.alfred.data.InteractionEntity
 import com.yshah.alfred.network.WebhookClient
 import com.yshah.alfred.network.WebhookResult
+import com.yshah.alfred.network.WebhookOutcome
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.util.UUID
 import javax.inject.Inject
@@ -41,22 +48,29 @@ private const val MAX_CONSECUTIVE_ERRORS = 2
  * plan's convo-mode timeout-tension note.
  */
 @Singleton
-class ConvoStateMachine @Inject constructor(
+class ConvoStateMachine internal constructor(
     private val speechCaptureController: SpeechCaptureController,
     private val ttsController: TtsController,
     private val webhookClient: WebhookClient,
     private val interactionDao: InteractionDao,
+    private val scope: CoroutineScope,
 ) {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    @Inject constructor(
+        speechCaptureController: SpeechCaptureController,
+        ttsController: TtsController,
+        webhookClient: WebhookClient,
+        interactionDao: InteractionDao,
+    ) : this(speechCaptureController, ttsController, webhookClient, interactionDao,
+        CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate))
     private val _state = MutableStateFlow<ConvoState>(ConvoState.Idle)
     val state: StateFlow<ConvoState> = _state
 
     private var sessionId: String = UUID.randomUUID().toString()
     private var consecutiveErrors = 0
-    private var captureJob: Job? = null
-    private var ttsJob: Job? = null
+    private var conversationJob: Job? = null
 
     fun startConversation() {
+        cancelTurn()
         sessionId = UUID.randomUUID().toString()
         consecutiveErrors = 0
         listen()
@@ -64,59 +78,90 @@ class ConvoStateMachine @Inject constructor(
 
     /** Interrupts TTS mid-speech and immediately starts listening for the next turn. */
     fun bargeIn() {
-        ttsJob?.cancel()
-        ttsController.stop()
+        if (conversationJob?.isActive != true) return
+        cancelTurn()
         listen()
     }
 
     fun endConversation() {
-        captureJob?.cancel()
-        ttsJob?.cancel()
-        speechCaptureController.cancel()
-        ttsController.stop()
+        cancelTurn()
         _state.value = ConvoState.Ended
     }
 
-    private fun listen() {
-        _state.value = ConvoState.Listening
-        captureJob?.cancel()
-        captureJob = scope.launch {
-            speechCaptureController.state.collect { captureState ->
-                when (captureState) {
-                    is CaptureState.PartialTranscript ->
-                        _state.value = ConvoState.PartialTranscript(captureState.text)
-                    is CaptureState.Finished -> {
-                        captureJob?.cancel()
-                        onTranscript(captureState.finalText)
-                    }
-                    is CaptureState.Error -> {
-                        captureJob?.cancel()
-                        onTurnError("Didn't catch that.")
-                    }
-                    else -> {}
-                }
-            }
-        }
-        speechCaptureController.start(CaptureMode.AUTO_STOP)
+    private fun cancelTurn() {
+        conversationJob?.cancel()
+        conversationJob = null
+        speechCaptureController.cancel()
+        ttsController.stop()
     }
 
-    private fun onTranscript(text: String) {
-        if (text.isBlank()) {
-            listen()
-            return
-        }
-        _state.value = ConvoState.Sending
-        scope.launch {
-            val result = webhookClient.sendConvoTurn(text, sessionId)
-            recordTurn(text, result)
-            when (result) {
-                is WebhookResult.Success -> {
-                    consecutiveErrors = 0
-                    speak(result.response.responseText ?: result.response.message ?: "Okay.")
+    private fun listen() {
+        val currentSessionId = sessionId
+        // Assign before execution: Main.immediate can run a whole turn before launch returns.
+        conversationJob = scope.launch(start = CoroutineStart.LAZY) {
+            while (true) {
+                currentCoroutineContext().ensureActive()
+                _state.value = ConvoState.Listening
+                speechCaptureController.start(CaptureMode.AUTO_STOP)
+                val capture = speechCaptureController.state.first {
+                    if (it is CaptureState.PartialTranscript) {
+                        _state.value = ConvoState.PartialTranscript(it.text)
+                    }
+                    it is CaptureState.Finished || it is CaptureState.Error
                 }
-                else -> onTurnError("Sorry, that's taking too long.")
+                var legacyReply = false
+                val reply = if (capture is CaptureState.Finished) {
+                    if (capture.requiresReview) {
+                        _state.value = ConvoState.Error("Recognition was incomplete. Please retry: ${capture.finalText}")
+                        return@launch
+                    }
+                    val text = capture.finalText
+                    if (text.isBlank()) continue
+                    _state.value = ConvoState.Sending
+                    val result = webhookClient.sendConvoTurn(text, currentSessionId)
+                    currentCoroutineContext().ensureActive()
+                    try {
+                        recordTurn(text, result, currentSessionId)
+                    } catch (e: CancellationException) { throw e
+                    } catch (_: Exception) {
+                        _state.value = ConvoState.Error("Reply received, but history could not be saved. Check device storage. Retry starts a new conversation.")
+                        return@launch
+                    }
+                    currentCoroutineContext().ensureActive()
+                    if (result is WebhookResult.Success) {
+                        val response = result.response
+                        legacyReply = response.outcome == WebhookOutcome.UNKNOWN && response.isLegacyResponse
+                        if ((!legacyReply && response.outcome != WebhookOutcome.COMPLETED) || response.responseText.isNullOrBlank()) {
+                            _state.value = ConvoState.Error(when (response.outcome) {
+                                WebhookOutcome.ACCEPTED -> "Request accepted, but no completed reply was returned."
+                                WebhookOutcome.FAILED -> "The request failed. Check history for details."
+                                WebhookOutcome.NEEDS_CONFIRMATION -> "The request needs confirmation. Check history for details."
+                                else -> "The server did not return a confirmed reply. Check history for details."
+                            })
+                            return@launch
+                        }
+                        consecutiveErrors = 0
+                        response.responseText
+                    } else null
+                } else null
+                if (reply == null) {
+                    consecutiveErrors++
+                    if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+                        endConversation()
+                        return@launch
+                    }
+                }
+                if (!speak(reply ?: if (capture is CaptureState.Error) {
+                    "Didn't catch that."
+                } else {
+                    "Sorry, that's taking too long."
+                }, legacyReply)) {
+                    _state.value = ConvoState.Error("Speech playback failed. The full reply is available in history. Retry to continue.")
+                    return@launch
+                }
             }
         }
+        conversationJob?.start()
     }
 
     /**
@@ -124,9 +169,10 @@ class ConvoStateMachine @Inject constructor(
      * [sessionId] stays constant across turns (for n8n correlation) so it can't double as the
      * row's primary key without later turns overwriting earlier ones.
      */
-    private suspend fun recordTurn(requestText: String, result: WebhookResult) {
+    private suspend fun recordTurn(requestText: String, result: WebhookResult, conversationId: String) {
         val (status, responseText) = when (result) {
-            is WebhookResult.Success -> "success" to (result.response.responseText ?: result.response.message)
+            is WebhookResult.Success -> (if (result.response.outcome == WebhookOutcome.UNKNOWN && result.response.isLegacyResponse)
+                "delivered" else result.response.outcome.name.lowercase()) to (result.response.responseText ?: result.response.message)
             is WebhookResult.HttpError -> "http_error" to result.body
             is WebhookResult.Timeout -> "timeout" to null
             is WebhookResult.NetworkError -> "network_error" to result.throwable.message
@@ -139,31 +185,30 @@ class ConvoStateMachine @Inject constructor(
                 timestamp = System.currentTimeMillis(),
                 status = status,
                 responseText = responseText,
+                conversationId = conversationId,
+                httpCode = when (result) {
+                    is WebhookResult.Success -> result.httpCode
+                    is WebhookResult.HttpError -> result.code
+                    else -> null
+                },
+                timeZone = java.time.ZoneId.systemDefault().id,
             ),
         )
     }
 
-    private fun speak(text: String) {
-        _state.value = ConvoState.Speaking(text)
-        ttsJob?.cancel()
-        ttsJob = scope.launch {
-            ttsController.state.collect { ttsState ->
-                if (ttsState is TtsState.Done || ttsState is TtsState.Error) {
-                    ttsJob?.cancel()
-                    listen()
-                }
+    private suspend fun speak(text: String, legacyReply: Boolean = false): Boolean {
+        currentCoroutineContext().ensureActive()
+        _state.value = ConvoState.Speaking(if (legacyReply) "$text\n\nLegacy reply — action outcome not verified." else text)
+        val utteranceId = UUID.randomUUID().toString()
+        ttsController.speak(text, utteranceId)
+        val terminal = withTimeoutOrNull( maxOf(30_000L, text.length * 150L)) { ttsController.state.first {
+            when (it) {
+                is TtsState.Done -> it.utteranceId == utteranceId
+                is TtsState.Error -> it.utteranceId == utteranceId
+                else -> false
             }
-        }
-        ttsController.speak(text)
-    }
-
-    private fun onTurnError(message: String) {
-        consecutiveErrors++
-        _state.value = ConvoState.Error(message)
-        if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-            endConversation()
-        } else {
-            speak(message)
-        }
+        } }
+        if (terminal !is TtsState.Done) ttsController.stop()
+        return terminal is TtsState.Done
     }
 }

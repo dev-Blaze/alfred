@@ -41,25 +41,27 @@ class SecureSettingsStore(private val context: Context) {
     }
 
     val settings: Flow<WebhookSettings> = context.webhookDataStore.data.map { prefs ->
+        val secret = decrypt(prefs[Keys.AUTH_SECRET_ENCRYPTED])
         WebhookSettings(
             webhookUrl = prefs[Keys.WEBHOOK_URL] ?: "",
             authScheme = AuthScheme.entries.find { it.name == prefs[Keys.AUTH_SCHEME] } ?: AuthScheme.NONE,
             authHeaderName = prefs[Keys.AUTH_HEADER_NAME] ?: "Authorization",
-            authSecret = decrypt(prefs[Keys.AUTH_SECRET_ENCRYPTED]),
+            authSecret = secret.orEmpty(),
+            credentialUnavailable = secret == null ||
+                (prefs[Keys.AUTH_SCHEME] != null && prefs[Keys.AUTH_SCHEME] != AuthScheme.NONE.name && secret.isNullOrEmpty()),
         )
     }
 
     suspend fun currentSettingsSnapshot(): WebhookSettings = settings.first()
 
-    suspend fun updateWebhookUrl(url: String) {
-        context.webhookDataStore.edit { it[Keys.WEBHOOK_URL] = url }
-    }
-
-    suspend fun updateAuth(scheme: AuthScheme, headerName: String, secret: String) {
+    suspend fun save(settings: WebhookSettings) {
+        settings.validate()
+        val encrypted = encrypt(if (settings.authScheme == AuthScheme.NONE) "" else settings.authSecret)
         context.webhookDataStore.edit { prefs ->
-            prefs[Keys.AUTH_SCHEME] = scheme.name
-            prefs[Keys.AUTH_HEADER_NAME] = headerName
-            prefs[Keys.AUTH_SECRET_ENCRYPTED] = encrypt(secret)
+            prefs[Keys.WEBHOOK_URL] = settings.webhookUrl
+            prefs[Keys.AUTH_SCHEME] = settings.authScheme.name
+            prefs[Keys.AUTH_HEADER_NAME] = settings.authHeaderName
+            prefs[Keys.AUTH_SECRET_ENCRYPTED] = encrypted
         }
     }
 
@@ -69,13 +71,13 @@ class SecureSettingsStore(private val context: Context) {
         return Base64.encodeToString(ciphertext, Base64.NO_WRAP)
     }
 
-    private fun decrypt(stored: String?): String {
+    private fun decrypt(stored: String?): String? {
         if (stored.isNullOrEmpty()) return ""
         return try {
             val ciphertext = Base64.decode(stored, Base64.NO_WRAP)
             String(aead.decrypt(ciphertext, null), Charsets.UTF_8)
         } catch (e: Exception) {
-            ""
+            null
         }
     }
 }

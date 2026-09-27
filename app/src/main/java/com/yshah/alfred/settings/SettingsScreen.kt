@@ -88,6 +88,10 @@ fun SettingsScreen(
                     label = { Text(secretLabelFor(uiState.authScheme)) },
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
+                    isError = uiState.credentialUnavailable,
+                    supportingText = if (uiState.credentialUnavailable) {
+                        { Text("Credential unavailable. Re-enter authentication and save.") }
+                    } else null,
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
@@ -96,17 +100,19 @@ fun SettingsScreen(
                 OutlinedButton(
                     onClick = viewModel::onTestConnection,
                     enabled = !uiState.isTestingConnection,
-                ) { Text("Test connection") }
+                ) { Text(if (uiState.isTestingConnection) "Testing…" else "Test draft") }
                 Button(
                     onClick = viewModel::onSave,
                     enabled = !uiState.isSaving,
-                ) { Text("Save") }
+                ) { Text(if (uiState.isSaving) "Saving…" else "Save") }
             }
+            Text("Testing uses these draft settings without saving them.", style = MaterialTheme.typography.bodySmall)
+            uiState.saveMessage?.let { Text(it) }
 
             uiState.testResult?.let { result ->
                 val (text, color) = when (result) {
                     is ConnectionTestResult.Success ->
-                        "Connected (HTTP ${result.httpStatusCode})" to MaterialTheme.colorScheme.primary
+                        "Capabilities verified (HTTP ${result.httpStatusCode})" to MaterialTheme.colorScheme.primary
                     is ConnectionTestResult.Failure ->
                         "Failed: ${result.message}" to MaterialTheme.colorScheme.error
                 }

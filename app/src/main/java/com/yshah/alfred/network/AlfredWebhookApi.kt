@@ -4,6 +4,8 @@ import okhttp3.ResponseBody
 import retrofit2.Response
 import retrofit2.http.Body
 import retrofit2.http.POST
+import retrofit2.http.HeaderMap
+import retrofit2.http.Streaming
 import retrofit2.http.Url
 
 /**
@@ -15,5 +17,6 @@ import retrofit2.http.Url
  */
 interface AlfredWebhookApi {
     @POST
-    suspend fun sendJson(@Url url: String, @Body payload: WebhookJsonPayload): Response<ResponseBody>
+    @Streaming
+    suspend fun sendJson(@Url url: String, @Body payload: WebhookJsonPayload, @HeaderMap headers: Map<String, String>): Response<ResponseBody>
 }

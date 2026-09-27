@@ -1,6 +1,9 @@
 package com.yshah.alfred.ui.overlay
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
@@ -36,6 +39,7 @@ fun OverlayScrimCard(
     Box(
         modifier = modifier
             .fillMaxSize()
+            .imePadding()
             .background(Color.Black.copy(alpha = 0.32f))
             .clickable(
                 indication = null,
@@ -62,7 +66,7 @@ fun OverlayScrimCard(
             tonalElevation = 6.dp,
             shadowElevation = 12.dp,
         ) {
-            Column(modifier = Modifier.padding(24.dp), content = content)
+            Column(modifier = Modifier.verticalScroll(rememberScrollState()).padding(24.dp), content = content)
         }
     }
 }

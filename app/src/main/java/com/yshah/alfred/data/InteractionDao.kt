@@ -11,6 +11,6 @@ interface InteractionDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(entity: InteractionEntity)
 
-    @Query("SELECT * FROM interactions ORDER BY timestamp DESC")
+    @Query("SELECT * FROM interactions ORDER BY timestamp DESC LIMIT 500")
     fun observeAll(): Flow<List<InteractionEntity>>
 }

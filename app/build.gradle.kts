@@ -27,8 +27,9 @@ android {
         applicationId = "com.yshah.alfred"
         minSdk = 34
         targetSdk = 36
-        versionCode = 6
-        versionName = "0.3.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        versionCode = 7
+        versionName = "0.3.1"
     }
 
     buildFeatures {
@@ -96,6 +97,7 @@ dependencies {
 
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
+    implementation("androidx.work:work-runtime-ktx:2.10.5")
     ksp(libs.androidx.room.compiler)
 
     implementation(libs.play.services.wearable)

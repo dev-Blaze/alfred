@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 import javax.inject.Inject
 
 data class SettingsUiState(
@@ -21,6 +22,8 @@ data class SettingsUiState(
     val isSaving: Boolean = false,
     val isTestingConnection: Boolean = false,
     val testResult: ConnectionTestResult? = null,
+    val credentialUnavailable: Boolean = false,
+    val saveMessage: String? = null,
 )
 
 @HiltViewModel
@@ -41,6 +44,7 @@ class SettingsViewModel @Inject constructor(
                 authScheme = saved.authScheme,
                 authHeaderName = saved.authHeaderName,
                 authSecret = saved.authSecret,
+                credentialUnavailable = saved.credentialUnavailable,
             )
         }
     }
@@ -58,23 +62,42 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun onAuthSecretChanged(secret: String) {
-        _uiState.value = _uiState.value.copy(authSecret = secret)
+        _uiState.value = _uiState.value.copy(authSecret = secret, credentialUnavailable = false)
     }
 
     fun onSave() {
+        if (_uiState.value.isSaving) return
+        val draft = draftSettings()
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isSaving = true)
-            persistCurrentState()
-            _uiState.value = _uiState.value.copy(isSaving = false)
+            _uiState.value = _uiState.value.copy(isSaving = true, saveMessage = null)
+            try {
+                settingsStore.save(draft)
+                _uiState.value = _uiState.value.copy(saveMessage = "Settings saved")
+            } catch (e: CancellationException) { throw e
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(saveMessage = if (e is IllegalArgumentException) e.message else "Could not save settings. Re-enter authentication and try again.")
+            } finally {
+                _uiState.value = _uiState.value.copy(isSaving = false)
+            }
         }
     }
 
     fun onTestConnection() {
+        if (_uiState.value.isTestingConnection) return
+        val draft = draftSettings()
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isTestingConnection = true, testResult = null)
-            persistCurrentState()
-            val result = webhookClient.testConnection()
-            _uiState.value = _uiState.value.copy(isTestingConnection = false, testResult = result)
+            try {
+                draft.validate()
+                val result = webhookClient.testConnection(draft)
+                _uiState.value = _uiState.value.copy(testResult = result)
+            } catch (e: CancellationException) { throw e
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(testResult = ConnectionTestResult.Failure(
+                    if (e is IllegalArgumentException) e.message ?: "Invalid settings" else "Connection test failed"))
+            } finally {
+                _uiState.value = _uiState.value.copy(isTestingConnection = false)
+            }
         }
     }
 
@@ -82,9 +105,8 @@ class SettingsViewModel @Inject constructor(
         ttsController.speak("Good evening. Alfred at your service — how may I help?")
     }
 
-    private suspend fun persistCurrentState() {
+    private fun draftSettings(): WebhookSettings {
         val state = _uiState.value
-        settingsStore.updateWebhookUrl(state.webhookUrl)
-        settingsStore.updateAuth(state.authScheme, state.authHeaderName, state.authSecret)
+        return WebhookSettings(state.webhookUrl, state.authScheme, state.authHeaderName, state.authSecret, state.credentialUnavailable)
     }
 }

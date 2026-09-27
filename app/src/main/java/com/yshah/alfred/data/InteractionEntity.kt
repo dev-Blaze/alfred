@@ -1,6 +1,7 @@
 package com.yshah.alfred.data
 
 import androidx.room.Entity
+import androidx.room.ColumnInfo
 import androidx.room.PrimaryKey
 
 @Entity(tableName = "interactions")
@@ -11,4 +12,8 @@ data class InteractionEntity(
     val timestamp: Long,
     val status: String, // "success" | "http_error" | "timeout" | "network_error"
     val responseText: String?,
+    val conversationId: String? = null,
+    val httpCode: Int? = null,
+    @ColumnInfo(defaultValue = "'UTC'") val timeZone: String = "UTC",
+    @ColumnInfo(defaultValue = "'phone'") val source: String = "phone",
 )

@@ -13,6 +13,16 @@ import kotlinx.coroutines.flow.StateFlow
 
 private const val AUTO_STOP_SILENCE_DEBOUNCE_MS = 1400L
 
+internal fun recoveredNoteAtCutoff(
+    mode: CaptureMode,
+    stoppedByUser: Boolean,
+    error: Int,
+    accumulatedText: String,
+): CaptureState.Finished? = if (
+    mode == CaptureMode.MANUAL_STOP && stoppedByUser && accumulatedText.isNotBlank() &&
+    (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)
+) CaptureState.Finished(accumulatedText) else null
+
 /**
  * Auto-stop is driven by our own debounce on partial results, not the
  * EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS intent extras — those are inconsistently
@@ -30,11 +40,19 @@ class SpeechRecognizerCaptureController(private val context: Context) : SpeechCa
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val debounceRunnable = Runnable { finishListening() }
+    private val deadlineRunnable = Runnable {
+        val text = joinAccumulated(latestPartial).trim()
+        destroyRecognizer()
+        _state.value = if (text.isNotBlank()) CaptureState.Finished(text, requiresReview = true)
+        else CaptureState.Error(-1, "Recognition timed out. Please retry.")
+    }
 
     private var recognizer: SpeechRecognizer? = null
     private var mode: CaptureMode = CaptureMode.AUTO_STOP
     private var accumulatedText: String = ""
     private var stoppedByUser = false
+    private var latestPartial = ""
+    private var generation = 0
 
     override fun start(mode: CaptureMode) {
         this.mode = mode
@@ -44,9 +62,7 @@ class SpeechRecognizerCaptureController(private val context: Context) : SpeechCa
     }
 
     override fun stop() {
-        stoppedByUser = true
-        mainHandler.removeCallbacks(debounceRunnable)
-        recognizer?.stopListening()
+        finishListening()
     }
 
     override fun cancel() {
@@ -58,52 +74,72 @@ class SpeechRecognizerCaptureController(private val context: Context) : SpeechCa
 
     private fun startNewRecognizerSession() {
         destroyRecognizer()
+        latestPartial = ""
+        val session = generation
         // The on-device ("Soda") recognizer was confirmed on-device to process a full ~5s window
         // and report an empty result even with clear speech present — the standard recognizer
         // (which can use the on-device model internally when appropriate, or fall back to cloud)
         // does not have this problem. Don't switch back to createOnDeviceSpeechRecognizer()
         // without re-verifying against a real device first.
+        try {
         recognizer = SpeechRecognizer.createSpeechRecognizer(context)
-        recognizer?.setRecognitionListener(listener)
+        recognizer?.setRecognitionListener(listener(session))
 
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
         }
-        recognizer?.startListening(intent)
         _state.value = CaptureState.Listening
+        recognizer?.startListening(intent)
+        mainHandler.postDelayed(deadlineRunnable, 120_000L)
+        } catch (_: Exception) {
+            destroyRecognizer()
+            _state.value = CaptureState.Error(-1, "Could not start microphone. Check permission and retry.")
+        }
     }
 
     private fun destroyRecognizer() {
+        generation++
+        mainHandler.removeCallbacks(debounceRunnable)
+        mainHandler.removeCallbacks(deadlineRunnable)
         recognizer?.setRecognitionListener(null)
         recognizer?.destroy()
         recognizer = null
     }
 
     private fun finishListening() {
+        if (recognizer == null || stoppedByUser) return
         mainHandler.removeCallbacks(debounceRunnable)
         stoppedByUser = true
         recognizer?.stopListening()
+        mainHandler.removeCallbacks(deadlineRunnable)
+        mainHandler.postDelayed(deadlineRunnable, 5_000L)
     }
 
     private fun joinAccumulated(latest: String): String =
         if (accumulatedText.isEmpty()) latest else "$accumulatedText $latest"
 
-    private val listener = object : RecognitionListener {
+    private fun listener(session: Int) = object : RecognitionListener {
         override fun onReadyForSpeech(params: Bundle?) {}
         override fun onBeginningOfSpeech() {}
         override fun onRmsChanged(rmsdB: Float) {}
         override fun onBufferReceived(buffer: ByteArray?) {}
-        override fun onEndOfSpeech() {}
+        override fun onEndOfSpeech() {
+            if (session != generation) return
+            mainHandler.removeCallbacks(deadlineRunnable)
+            mainHandler.postDelayed(deadlineRunnable, 5_000L)
+        }
         override fun onEvent(eventType: Int, params: Bundle?) {}
 
         override fun onPartialResults(partialResults: Bundle?) {
+            if (session != generation || stoppedByUser) return
             val text = partialResults
                 ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 ?.firstOrNull()
                 .orEmpty()
             if (text.isNotEmpty()) {
+                latestPartial = text
                 _state.value = CaptureState.PartialTranscript(joinAccumulated(text))
             }
             if (mode == CaptureMode.AUTO_STOP) {
@@ -113,12 +149,18 @@ class SpeechRecognizerCaptureController(private val context: Context) : SpeechCa
         }
 
         override fun onResults(results: Bundle?) {
+            if (session != generation) return
             mainHandler.removeCallbacks(debounceRunnable)
             val text = results
                 ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 ?.firstOrNull()
                 .orEmpty()
-            val combined = joinAccumulated(text)
+            val combined = joinAccumulated(text.ifBlank { latestPartial }).trim()
+            if (text.isBlank() && latestPartial.isNotBlank()) {
+                destroyRecognizer()
+                _state.value = CaptureState.Finished(combined, requiresReview = true)
+                return
+            }
 
             if (mode == CaptureMode.MANUAL_STOP && !stoppedByUser) {
                 accumulatedText = combined
@@ -131,15 +173,23 @@ class SpeechRecognizerCaptureController(private val context: Context) : SpeechCa
         }
 
         override fun onError(error: Int) {
+            if (session != generation) return
             mainHandler.removeCallbacks(debounceRunnable)
             val isRecoverableCutoff = error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT ||
                 error == SpeechRecognizer.ERROR_NO_MATCH
+            if (latestPartial.isNotBlank()) {
+                val text = joinAccumulated(latestPartial).trim()
+                destroyRecognizer()
+                _state.value = CaptureState.Finished(text, requiresReview = true)
+                return
+            }
             if (mode == CaptureMode.MANUAL_STOP && !stoppedByUser && isRecoverableCutoff) {
                 startNewRecognizerSession()
                 return
             }
             destroyRecognizer()
-            _state.value = CaptureState.Error(error, errorMessage(error))
+            _state.value = recoveredNoteAtCutoff(mode, stoppedByUser, error, accumulatedText)
+                ?: CaptureState.Error(error, errorMessage(error))
         }
     }
 

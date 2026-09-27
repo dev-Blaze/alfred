@@ -4,6 +4,7 @@ import com.yshah.alfred.settings.SecureSettingsStore
 import okhttp3.ConnectionPool
 import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
+import okhttp3.ResponseBody.Companion.toResponseBody
 import java.util.concurrent.TimeUnit
 
 /**
@@ -12,21 +13,30 @@ import java.util.concurrent.TimeUnit
  * in-session while the user is actively waiting for a spoken reply — see the plan's convo-mode
  * timeout-tension note for why these must not share one timeout.
  */
-class WebhookClientFactory(settingsStore: SecureSettingsStore) {
+class WebhookClientFactory(@Suppress("UNUSED_PARAMETER") settingsStore: SecureSettingsStore? = null) {
     private val sharedPool = ConnectionPool()
     private val sharedDispatcher = Dispatcher()
-    private val authInterceptor = AuthHeaderInterceptor(settingsStore)
 
     private fun baseBuilder(): OkHttpClient.Builder = OkHttpClient.Builder()
         .connectionPool(sharedPool)
         .dispatcher(sharedDispatcher)
-        .addInterceptor(authInterceptor)
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .retryOnConnectionFailure(false)
+        .addInterceptor { chain ->
+            val response = chain.proceed(chain.request())
+            // Bound successful and error bodies before Retrofit can buffer them.
+            val body = response.body
+            val contentType = body.contentType()
+            response.newBuilder().body(body.readBounded().toResponseBody(contentType)).build()
+        }
 
     val longRunningClient: OkHttpClient by lazy {
         baseBuilder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .writeTimeout(60, TimeUnit.SECONDS)
             .readTimeout(300, TimeUnit.SECONDS)
+            .callTimeout(300, TimeUnit.SECONDS)
             .build()
     }
 
@@ -35,6 +45,7 @@ class WebhookClientFactory(settingsStore: SecureSettingsStore) {
             .connectTimeout(10, TimeUnit.SECONDS)
             .writeTimeout(15, TimeUnit.SECONDS)
             .readTimeout(20, TimeUnit.SECONDS)
+            .callTimeout(20, TimeUnit.SECONDS)
             .build()
     }
 }
