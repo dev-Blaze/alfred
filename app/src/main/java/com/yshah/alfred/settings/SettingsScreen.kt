@@ -133,6 +133,16 @@ fun SettingsScreen(
             OutlinedButton(onClick = { context.startActivity(Intent(context, HistoryActivity::class.java)) }) {
                 Text("View history")
             }
+            val version = remember(context) {
+                context.packageManager.getPackageInfo(context.packageName, 0).versionName.orEmpty()
+            }
+            Text(
+                text = "Alfred $version",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            )
         }
     }
 }
