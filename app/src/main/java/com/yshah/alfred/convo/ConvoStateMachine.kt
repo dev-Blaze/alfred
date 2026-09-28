@@ -45,7 +45,7 @@ private const val MAX_CONSECUTIVE_ERRORS = 2
  * Listening -> Sending -> Speaking -> Listening loop. Deliberately does NOT go through
  * WebhookForegroundService's 300s notify-later path — the user is actively waiting for a spoken
  * reply, so a "notification arrives later" UX would be wrong here. Uses
- * WebhookClient.sendConvoTurn's short (~20s) in-session timeout instead, and turns
+ * WebhookClient.sendConvoTurn's bounded (120s) in-session timeout instead, and turns
  * errors/timeouts into a spoken in-loop message rather than a deferred notification — see the
  * plan's convo-mode timeout-tension note.
  */
@@ -147,8 +147,10 @@ class ConvoStateMachine internal constructor(
                         val clarificationQuestion = response.clarification?.question
                             ?.takeIf { response.outcome == WebhookOutcome.NEEDS_CONFIRMATION }
                         legacyReply = response.outcome == WebhookOutcome.UNKNOWN && response.isLegacyResponse
+                        val acceptedReply = response.outcome == WebhookOutcome.ACCEPTED &&
+                            !response.responseText.isNullOrBlank() && response.clarification == null
                         if (clarificationQuestion == null &&
-                            ((!legacyReply && response.outcome != WebhookOutcome.COMPLETED) || response.responseText.isNullOrBlank())) {
+                            ((!legacyReply && !acceptedReply && response.outcome != WebhookOutcome.COMPLETED) || response.responseText.isNullOrBlank())) {
                             _state.value = ConvoState.Error(when (response.outcome) {
                                 WebhookOutcome.ACCEPTED -> "Request accepted, but no completed reply was returned."
                                 WebhookOutcome.FAILED -> "The request failed. Check history for details."
@@ -158,7 +160,8 @@ class ConvoStateMachine internal constructor(
                             return@launch
                         }
                         consecutiveErrors = 0
-                        clarificationQuestion ?: response.responseText
+                        if (acceptedReply) "Completion is not confirmed. ${response.responseText}"
+                        else clarificationQuestion ?: response.responseText
                     } else null
                 } else null
                 if (reply == null) {

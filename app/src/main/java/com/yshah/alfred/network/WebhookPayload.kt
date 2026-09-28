@@ -41,6 +41,7 @@ data class WebhookJsonPayload(
     val schemaVersion: Int = 1,
     val inReplyTo: String? = null,
     val contextToken: String? = null,
+    val intentHint: String? = null,
 )
 
 @Serializable

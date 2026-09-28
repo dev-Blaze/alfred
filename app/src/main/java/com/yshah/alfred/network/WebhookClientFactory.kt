@@ -9,7 +9,7 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Two timeout profiles sharing one connection pool/dispatcher: a 300s "fire and (eventually)
- * notify" profile for task/note/image, and a short ~20s profile for convo mode, which runs
+ * notify" profile for task/note/image, and a 120s profile for convo mode, which runs
  * in-session while the user is actively waiting for a spoken reply — see the plan's convo-mode
  * timeout-tension note for why these must not share one timeout.
  */
@@ -44,8 +44,8 @@ class WebhookClientFactory(@Suppress("UNUSED_PARAMETER") settingsStore: SecureSe
         baseBuilder()
             .connectTimeout(10, TimeUnit.SECONDS)
             .writeTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(20, TimeUnit.SECONDS)
-            .callTimeout(20, TimeUnit.SECONDS)
+            .readTimeout(120, TimeUnit.SECONDS)
+            .callTimeout(120, TimeUnit.SECONDS)
             .build()
     }
 }

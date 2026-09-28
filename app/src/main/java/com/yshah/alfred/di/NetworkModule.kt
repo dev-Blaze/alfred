@@ -30,5 +30,7 @@ object NetworkModule {
     fun provideWebhookClient(
         settingsStore: SecureSettingsStore,
         clientFactory: WebhookClientFactory,
-    ): WebhookClient = RetrofitWebhookClient(settingsStore, clientFactory)
+        @ApplicationContext context: Context,
+    ): WebhookClient = RetrofitWebhookClient(settingsStore, clientFactory,
+        com.yshah.alfred.network.IntentClassifier(context))
 }

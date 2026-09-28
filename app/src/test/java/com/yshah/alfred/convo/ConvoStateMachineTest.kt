@@ -210,7 +210,7 @@ class ConvoStateMachineTest {
     }
 
     @Test fun unconfirmedOutcomesNeverSpeakSuccess() {
-        for (outcome in WebhookOutcome.entries.filter { it != WebhookOutcome.COMPLETED }) {
+        for (outcome in WebhookOutcome.entries.filter { it != WebhookOutcome.COMPLETED && it != WebhookOutcome.ACCEPTED }) {
             val f = Fixture()
             try {
                 f.send = { WebhookResult.Success(WebhookResponseBody(responseText = "Okay", outcome = outcome)) }
@@ -220,6 +220,22 @@ class ConvoStateMachineTest {
                 assertTrue(f.machine.state.value is ConvoState.Error)
             } finally { f.scope.cancel() }
         }
+    }
+
+    @Test fun acceptedReplySpeaksUncertaintyAndContinuesWithoutClaimingCompletion() {
+        val f = Fixture()
+        try {
+            f.send = { WebhookResult.Success(WebhookResponseBody(responseText = "Assistant report", outcome = WebhookOutcome.ACCEPTED)) }
+            f.machine.startConversation()
+            f.capture.state.value = CaptureState.Finished("request")
+            assertEquals(listOf("Completion is not confirmed. Assistant report"), f.tts.spoken)
+            assertEquals("accepted", f.rows.single().status)
+            f.tts.state.value = TtsState.Done(f.tts.id)
+            assertEquals(ConvoState.Listening, f.machine.state.value)
+            f.capture.state.value = CaptureState.Finished("follow up")
+            assertEquals(f.metadata.first().requestId, f.metadata.last().inReplyTo)
+            assertNull(f.metadata.last().contextToken)
+        } finally { f.scope.cancel() }
     }
 
     @Test fun partialSalvageIsNotSentAndStorageFailureCanRecover() {
@@ -264,10 +280,9 @@ class ConvoStateMachineTest {
             parseResponseBody(""),
             parseResponseBody("""{"output":" "}"""),
             parseResponseBody("""{"status":"completed","output":""}"""),
-            parseResponseBody("""{"status":"accepted","output":"Done"}"""),
             parseResponseBody("""{"success":false,"output":"Done"}"""),
             parseResponseBody("""{"status":"unknown","output":"Done"}"""),
-        ) + listOf(WebhookOutcome.ACCEPTED, WebhookOutcome.FAILED, WebhookOutcome.NEEDS_CONFIRMATION).map {
+        ) + listOf(WebhookOutcome.FAILED, WebhookOutcome.NEEDS_CONFIRMATION).map {
             WebhookResponseBody(responseText = "Done", outcome = it, isLegacyResponse = true)
         }
         for (response in responses) {

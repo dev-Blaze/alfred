@@ -1,0 +1,6 @@
+Encoder: sentence-transformers/all-MiniLM-L6-v2
+Source: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2
+License: Apache License 2.0 (included as LICENSE)
+Modified for Alfred: exported to ONNX and dynamically quantized to INT8.
+Classification head: trained on the synthetic examples in docs/train_intent.py.
+This is a frozen-encoder baseline, not a SetFit-fine-tuned model.

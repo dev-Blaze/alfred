@@ -58,7 +58,7 @@ class WebhookContractTest {
     @Test fun clientsDisableRedirectsRetriesAndSetTotalTimeout() {
         val factory = WebhookClientFactory()
         assertEquals(300_000, factory.longRunningClient.callTimeoutMillis)
-        assertEquals(20_000, factory.convoClient.callTimeoutMillis)
+        assertEquals(120_000, factory.convoClient.callTimeoutMillis)
         for (client in listOf(factory.longRunningClient, factory.convoClient)) {
             assertFalse(client.followRedirects)
             assertFalse(client.followSslRedirects)

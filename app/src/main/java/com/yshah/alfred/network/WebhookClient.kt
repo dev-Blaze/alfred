@@ -39,6 +39,7 @@ interface WebhookClient {
 class RetrofitWebhookClient(
     private val settingsStore: SecureSettingsStore,
     private val clientFactory: WebhookClientFactory,
+    private val intentClassifier: IntentClassifier? = null,
 ) : WebhookClient {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
@@ -69,7 +70,8 @@ class RetrofitWebhookClient(
         require(sessionId.matches(Regex("[A-Za-z0-9_-]{1,128}"))) { "Invalid session ID" }
         val payload = WebhookJsonPayload(type, text, Instant.ofEpochMilli(metadata.capturedAt).toString(), sessionId,
             metadata.capturedAt, metadata.timeZone, metadata.source, metadata.requestId, metadata.conversationId, metadata.schemaVersion,
-            metadata.inReplyTo, metadata.contextToken)
+            metadata.inReplyTo, metadata.contextToken,
+            if (type == "ping") null else intentClassifier?.classify(text, metadata.inReplyTo != null))
         return apiFor(client).sendJson(settings.webhookUrl, payload, headers)
     }
 

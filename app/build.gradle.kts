@@ -28,8 +28,8 @@ android {
         minSdk = 34
         targetSdk = 36
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        versionCode = 11
-        versionName = "0.3.5"
+        versionCode = 12
+        versionName = "0.3.6"
     }
 
     buildFeatures {
@@ -65,6 +65,7 @@ android {
 }
 
 dependencies {
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
     implementation(platform(libs.androidx.compose.bom))
 
     implementation(libs.androidx.core.ktx)
