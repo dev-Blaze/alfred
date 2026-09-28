@@ -4,7 +4,7 @@
 
 Alfred 0.3.2 adds the client contract described below. Calendar functionality belongs entirely in n8n: Google authorization, date interpretation, calendar selection, availability, event writes, corrections, and reconciliation. Alfred supplies generic capture and result presentation. No native calendar integration is required.
 
-This is an implementation guide, not an importable workflow or evidence of a deployed backend. No live n8n or Google account was inspected. The baseline below comes from [README](../README.md) and the current [network code](../app/src/main/java/com/yshah/alfred/network/). Proposed backend records and stages are design requirements, not implemented features.
+This is the target implementation contract. The live n8n backend has now been inspected and a calendar foundation implemented and tested; see [deployment status and verification](N8N_DEPLOYMENT.md) for the exact supported subset, publication status and remaining limits. Requirements below are not all claims of implemented functionality.
 
 **Client contract in v0.3.2:** optional response `receipt: {action,externalId,url}`, `clarification: {token,question}`, and `conversationId`, plus request `inReplyTo`, `contextToken`, and `conversationId`. Phone History supports linked Task/Note replies and corrections. Install v0.3.2 or later to use these features; v0.3.1 does not include them. Backend implementation and deployment remain separate work.
 
