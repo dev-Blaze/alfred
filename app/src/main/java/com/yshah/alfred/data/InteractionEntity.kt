@@ -16,4 +16,7 @@ data class InteractionEntity(
     val httpCode: Int? = null,
     @ColumnInfo(defaultValue = "'UTC'") val timeZone: String = "UTC",
     @ColumnInfo(defaultValue = "'phone'") val source: String = "phone",
+    val inReplyTo: String? = null,
+    val contextToken: String? = null,
+    val responseMetadata: String? = null,
 )

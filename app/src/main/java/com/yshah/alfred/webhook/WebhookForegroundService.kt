@@ -15,6 +15,7 @@ import androidx.core.content.ContextCompat
 import com.yshah.alfred.R
 import com.yshah.alfred.data.InteractionDao
 import com.yshah.alfred.data.InteractionEntity
+import com.yshah.alfred.network.storedMetadata
 import com.yshah.alfred.history.HistoryActivity
 import com.yshah.alfred.network.WebhookClient
 import com.yshah.alfred.network.WebhookResult
@@ -151,6 +152,7 @@ class WebhookForegroundService : Service() {
                 timestamp = System.currentTimeMillis(),
                 status = status,
                 responseText = responseText,
+                responseMetadata = (result as? WebhookResult.Success)?.response?.storedMetadata(),
             ),
         )
     }

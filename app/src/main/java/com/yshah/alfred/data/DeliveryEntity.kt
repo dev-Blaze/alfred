@@ -20,6 +20,10 @@ data class DeliveryEntity(
     val httpCode: Int? = null,
     val resultPublished: Boolean = false,
     val resultRevision: Long = 1,
+    val conversationId: String? = null,
+    val inReplyTo: String? = null,
+    val contextToken: String? = null,
+    val responseMetadata: String? = null,
 )
 
 @Dao
@@ -36,8 +40,8 @@ interface DeliveryDao {
     @Query("UPDATE deliveries SET status = 'sending' WHERE requestId = :id AND status = 'pending'")
     suspend fun claim(id: String): Int
 
-    @Query("UPDATE deliveries SET status = :status, message = :message, httpCode = :code, resultPublished = 0, resultRevision = resultRevision + 1 WHERE requestId = :id")
-    suspend fun finish(id: String, status: String, message: String?, code: Int?)
+    @Query("UPDATE deliveries SET status = :status, message = :message, httpCode = :code, responseMetadata = :metadata, resultPublished = 0, resultRevision = resultRevision + 1 WHERE requestId = :id")
+    suspend fun finish(id: String, status: String, message: String?, code: Int?, metadata: String? = null)
 
     @Query("UPDATE deliveries SET resultPublished = 1 WHERE requestId = :id AND resultRevision = :revision")
     suspend fun published(id: String, revision: Long)
@@ -45,7 +49,7 @@ interface DeliveryDao {
     @Query("UPDATE deliveries SET resultPublished = 0 WHERE requestId = :id")
     suspend fun republish(id: String)
 
-    @Query("UPDATE deliveries SET status = 'pending', message = NULL, httpCode = NULL, resultPublished = 0, resultRevision = resultRevision + 1 WHERE requestId = :id AND status IN ('uncertain', 'http_error', 'unknown', 'failed')")
+    @Query("UPDATE deliveries SET status = 'pending', message = NULL, httpCode = NULL, responseMetadata = NULL, resultPublished = 0, resultRevision = resultRevision + 1 WHERE requestId = :id AND status IN ('uncertain', 'http_error', 'unknown', 'failed')")
     suspend fun retry(id: String): Int
 
     @Query("DELETE FROM interactions WHERE sessionId = :id AND NOT EXISTS (SELECT 1 FROM deliveries WHERE requestId = :id AND status IN ('pending', 'sending'))")

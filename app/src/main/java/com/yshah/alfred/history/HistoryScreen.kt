@@ -40,6 +40,12 @@ import com.yshah.alfred.data.InteractionEntity
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.platform.LocalUriHandler
+import com.yshah.alfred.network.responseMetadata
+import com.yshah.alfred.network.safeReceiptUrl
 
 private val TIMESTAMP_FORMATTER = DateTimeFormatter.ofPattern("MMM d, h:mm a")
 
@@ -53,6 +59,12 @@ fun HistoryScreen(viewModel: HistoryViewModel = hiltViewModel()) {
     var query by rememberSaveable { mutableStateOf("") }
     var retryId by rememberSaveable { mutableStateOf<String?>(null) }
     var deleteId by rememberSaveable { mutableStateOf<String?>(null) }
+    var replyId by rememberSaveable { mutableStateOf<String?>(null) }
+    var replyText by rememberSaveable { mutableStateOf("") }
+    val replySaved by viewModel.replySaved.collectAsState()
+    LaunchedEffect(replySaved) {
+        if (replySaved != null && replySaved == replyId) { replyId = null; replyText = "" }
+    }
     val filtered = interactions.filter { item ->
         listOf(item.requestText, item.responseText.orEmpty(), item.status, item.sessionId,
             item.conversationId.orEmpty()).any { it.contains(query, ignoreCase = true) }
@@ -73,7 +85,8 @@ fun HistoryScreen(viewModel: HistoryViewModel = hiltViewModel()) {
             ) {
                 items(filtered, key = { it.sessionId }) { item ->
                     InteractionRow(item, canRetry = item.sessionId in retryable, busy = busy,
-                        onRetry = { retryId = item.sessionId }, onDelete = { deleteId = item.sessionId })
+                        onRetry = { retryId = item.sessionId }, onDelete = { deleteId = item.sessionId },
+                        onReply = { viewModel.replySaved.value = null; replyId = item.sessionId; replyText = "" })
                     HorizontalDivider()
                 }
             }
@@ -85,6 +98,26 @@ fun HistoryScreen(viewModel: HistoryViewModel = hiltViewModel()) {
             confirmButton = { TextButton(onClick = { retryId = null; viewModel.retry(id) }, enabled = !busy) { Text("Retry anyway") } },
             dismissButton = { TextButton(onClick = { retryId = null }) { Text("Cancel") } })
     }
+    interactions.firstOrNull { it.sessionId == replyId }?.let { original ->
+        val question = responseMetadata(original.responseMetadata).clarification?.question
+        AlertDialog(onDismissRequest = { if (!busy) replyId = null },
+            title = { Text(if (question != null) "Reply" else "Correct request") },
+            text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(question ?: original.requestText)
+                Text("Sends a new request linked to this entry.")
+                OutlinedTextField(value = replyText, onValueChange = { replyText = it },
+                    enabled = !busy, label = { Text("Reply or correction") },
+                    isError = replyText.length > 50_000,
+                    supportingText = { if (replyText.length > 50_000) Text("Use at most 50,000 characters") },
+                    modifier = Modifier.fillMaxWidth())
+                message?.let { Text(it) }
+            } },
+            confirmButton = { TextButton(enabled = !busy && replyText.isNotBlank() && replyText.length <= 50_000,
+                onClick = {
+                    viewModel.reply(original, replyText)
+                }) { Text(if (busy) "Saving…" else "Send") } },
+            dismissButton = { TextButton(enabled = !busy, onClick = { replyId = null }) { Text("Cancel") } })
+    }
     deleteId?.let { id ->
         AlertDialog(onDismissRequest = { deleteId = null }, title = { Text("Delete history entry?") },
             text = { Text("This removes the entry from history. It does not undo server actions. The delivery record is retained to prevent duplicate sends.") },
@@ -94,8 +127,11 @@ fun HistoryScreen(viewModel: HistoryViewModel = hiltViewModel()) {
 }
 
 @Composable
-private fun InteractionRow(item: InteractionEntity, canRetry: Boolean, busy: Boolean, onRetry: () -> Unit, onDelete: () -> Unit) {
+private fun InteractionRow(item: InteractionEntity, canRetry: Boolean, busy: Boolean, onRetry: () -> Unit, onDelete: () -> Unit, onReply: () -> Unit) {
     var expanded by remember { mutableStateOf(false) }
+    val metadata = remember(item.responseMetadata) { responseMetadata(item.responseMetadata) }
+    val uriHandler = LocalUriHandler.current
+    var linkError by remember { mutableStateOf(false) }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -126,7 +162,23 @@ private fun InteractionRow(item: InteractionEntity, canRetry: Boolean, busy: Boo
             )
             Text("${item.source} · ${item.timeZone}" + (item.httpCode?.let { " · HTTP $it" } ?: ""), style = MaterialTheme.typography.labelSmall)
             Text("Request: ${item.sessionId}", style = MaterialTheme.typography.labelSmall)
-            item.conversationId?.let { Text("Conversation: $it", style = MaterialTheme.typography.labelSmall) }
+            (metadata.conversationId ?: item.conversationId)?.let { Text("Conversation: $it", style = MaterialTheme.typography.labelSmall) }
+            item.inReplyTo?.let { Text("In reply to: $it", style = MaterialTheme.typography.labelSmall) }
+            metadata.clarification?.let { Text(it.question, style = MaterialTheme.typography.bodyMedium) }
+            metadata.receipt?.let { receipt ->
+                Text(receipt.action, style = MaterialTheme.typography.titleSmall)
+                receipt.externalId?.let { Text("External ID: $it", style = MaterialTheme.typography.bodySmall) }
+                safeReceiptUrl(receipt.url)?.let { url ->
+                    TextButton(onClick = {
+                        try { uriHandler.openUri(url); linkError = false }
+                        catch (_: Exception) { linkError = true }
+                    }) { Text("Open receipt · ${java.net.URI(url).host}") }
+                }
+                if (linkError) Text("No app could open this link", color = MaterialTheme.colorScheme.error)
+            }
+            if (item.type in listOf("task", "note") && item.status !in listOf("pending", "sending")) {
+                TextButton(enabled = !busy, onClick = onReply) { Text(if (metadata.clarification != null) "Reply" else "Correct") }
+            }
             Row {
                 if (canRetry) TextButton(enabled = !busy, onClick = onRetry) { Text("Retry") }
                 TextButton(enabled = !busy && item.status !in listOf("pending", "sending"), onClick = onDelete) { Text("Delete") }

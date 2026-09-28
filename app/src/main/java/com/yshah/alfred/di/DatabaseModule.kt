@@ -18,7 +18,7 @@ object DatabaseModule {
     @Singleton
     fun provideAlfredDatabase(@ApplicationContext context: Context): AlfredDatabase =
         Room.databaseBuilder(context, AlfredDatabase::class.java, "alfred.db")
-            .addMigrations(AlfredDatabase.MIGRATION_1_2).build()
+            .addMigrations(AlfredDatabase.MIGRATION_1_2, AlfredDatabase.MIGRATION_2_3).build()
 
     @Provides
     @Singleton

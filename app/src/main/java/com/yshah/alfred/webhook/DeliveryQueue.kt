@@ -13,6 +13,8 @@ import com.yshah.alfred.network.WebhookClient
 import com.yshah.alfred.network.WebhookResult
 import com.yshah.alfred.network.WebhookOutcome
 import com.yshah.alfred.network.WebhookRequestMetadata
+import com.yshah.alfred.network.responseMetadata
+import com.yshah.alfred.network.storedMetadata
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
@@ -36,6 +38,7 @@ internal fun Context.deliveryDependencies() =
     EntryPointAccessors.fromApplication(this, DeliveryDependencies::class.java)
 
 internal fun validateDelivery(item: DeliveryEntity) {
+    item.requestMetadata().validate()
     require(item.requestId.matches(Regex("[A-Za-z0-9_-]{1,128}"))) { "Invalid request ID" }
     require(item.type == "task" || item.type == "note") { "Invalid capture type" }
     require(item.text.isNotBlank() && item.text.length <= 50_000) { "Invalid capture text" }
@@ -47,9 +50,24 @@ internal fun validateDelivery(item: DeliveryEntity) {
 internal fun requireSameCapture(existing: DeliveryEntity, incoming: DeliveryEntity) {
     require(existing.requestId == incoming.requestId && existing.text == incoming.text &&
         existing.type == incoming.type && existing.source == incoming.source &&
-        existing.capturedAt == incoming.capturedAt && existing.timeZone == incoming.timeZone) {
+        existing.capturedAt == incoming.capturedAt && existing.timeZone == incoming.timeZone &&
+        existing.conversationId == incoming.conversationId && existing.inReplyTo == incoming.inReplyTo &&
+        existing.contextToken == incoming.contextToken) {
         "Request ID already belongs to another capture"
     }
+}
+
+internal fun DeliveryEntity.requestMetadata() = WebhookRequestMetadata(
+    capturedAt = capturedAt, timeZone = timeZone, source = source, requestId = requestId,
+    conversationId = conversationId, inReplyTo = inReplyTo, contextToken = contextToken)
+
+internal fun followUp(original: InteractionEntity, text: String): DeliveryEntity {
+    require(original.type in listOf("task", "note") && original.status !in listOf("pending", "sending")) { "This entry cannot receive a follow-up" }
+    val metadata = responseMetadata(original.responseMetadata)
+    return DeliveryEntity(java.util.UUID.randomUUID().toString(), text.trim(), original.type,
+        System.currentTimeMillis(), ZoneId.systemDefault().id, "phone",
+        conversationId = metadata.conversationId ?: original.conversationId,
+        inReplyTo = original.sessionId, contextToken = metadata.clarification?.token).also(::validateDelivery)
 }
 
 object DeliveryQueue {
@@ -99,6 +117,8 @@ object DeliveryQueue {
             sessionId = item.requestId, type = item.type, requestText = item.text,
             timestamp = item.capturedAt, status = item.status, responseText = item.message,
             httpCode = item.httpCode, timeZone = item.timeZone, source = item.source,
+            conversationId = item.conversationId, inReplyTo = item.inReplyTo,
+            contextToken = item.contextToken, responseMetadata = item.responseMetadata,
         ))
     }
 }
@@ -127,8 +147,7 @@ class DeliveryWorker(context: Context, parameters: WorkerParameters) : Coroutine
                         // Once claimed, any interruption is uncertain. Never automatically replay mutations.
                         val outcome = try {
                             deliveryOutcome(dependencies.webhookClient().sendTaskOrNote(item.text, item.type, item.requestId,
-                                WebhookRequestMetadata(capturedAt = item.capturedAt, timeZone = item.timeZone,
-                                    source = item.source, requestId = item.requestId)))
+                                item.requestMetadata()))
                         } catch (e: CancellationException) { throw e
                         } catch (e: Exception) { DeliveryOutcome("uncertain", e.message ?: "Delivery outcome unknown") }
                         finish(db, item, outcome)
@@ -158,8 +177,8 @@ class DeliveryWorker(context: Context, parameters: WorkerParameters) : Coroutine
 
     private suspend fun finish(db: AlfredDatabase, item: DeliveryEntity, outcome: DeliveryOutcome) {
         db.withTransaction {
-            db.deliveryDao().finish(item.requestId, outcome.status, outcome.message, outcome.httpCode)
-            DeliveryQueue.record(db, item.copy(status = outcome.status, message = outcome.message, httpCode = outcome.httpCode))
+            db.deliveryDao().finish(item.requestId, outcome.status, outcome.message, outcome.httpCode, outcome.metadata)
+            DeliveryQueue.record(db, item.copy(status = outcome.status, message = outcome.message, httpCode = outcome.httpCode, responseMetadata = outcome.metadata))
         }
         if (androidx.core.content.ContextCompat.checkSelfPermission(applicationContext,
                 android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
@@ -189,7 +208,7 @@ class DeliveryWorker(context: Context, parameters: WorkerParameters) : Coroutine
     companion object { private val lock = Mutex() }
 }
 
-internal data class DeliveryOutcome(val status: String, val message: String?, val httpCode: Int? = null)
+internal data class DeliveryOutcome(val status: String, val message: String?, val httpCode: Int? = null, val metadata: String? = null)
 
 internal fun deliveryOutcome(result: WebhookResult): DeliveryOutcome = when (result) {
     is WebhookResult.Success -> {
@@ -201,7 +220,7 @@ internal fun deliveryOutcome(result: WebhookResult): DeliveryOutcome = when (res
             WebhookOutcome.UNKNOWN -> if (result.response.isLegacyResponse) "delivered" else "unknown"
         }
         val text = result.response.responseText ?: result.response.message
-        DeliveryOutcome(status, listOfNotNull(deliveryStatusLabel(status), text?.takeIf { it.isNotBlank() }).joinToString("\n"), result.httpCode)
+        DeliveryOutcome(status, listOfNotNull(deliveryStatusLabel(status), text?.takeIf { it.isNotBlank() }).joinToString("\n"), result.httpCode, result.response.storedMetadata())
     }
     is WebhookResult.HttpError -> DeliveryOutcome("http_error", result.body, result.code)
     is WebhookResult.Timeout -> DeliveryOutcome("uncertain", "Timed out; the server may already have executed this request. Check before retrying.")

@@ -40,11 +40,13 @@ class ConvoStateMachineTest {
         val tts = Tts()
         val rows = mutableListOf<InteractionEntity>()
         val requests = mutableListOf<Pair<String, String>>()
+        val metadata = mutableListOf<WebhookRequestMetadata>()
         var failStorage = false
         var send: suspend () -> WebhookResult = { WebhookResult.Success(WebhookResponseBody(responseText = "reply", outcome = WebhookOutcome.COMPLETED)) }
         val machine = ConvoStateMachine(capture, tts, object : WebhookClient {
-            override suspend fun sendConvoTurn(text: String, sessionId: String): WebhookResult {
+            override suspend fun sendConvoTurn(text: String, sessionId: String, metadata: WebhookRequestMetadata): WebhookResult {
                 requests += text to sessionId
+                this@Fixture.metadata += metadata
                 return send()
             }
             override suspend fun sendTaskOrNote(text: String, type: String, sessionId: String): WebhookResult = error("unused")
@@ -56,6 +58,70 @@ class ConvoStateMachineTest {
             }
             override fun observeAll() = MutableStateFlow<List<InteractionEntity>>(emptyList())
         }, scope)
+    }
+
+    @Test fun clarificationRotatesContextAndCorrelatesHistoryBeforeListening() {
+        val f = Fixture()
+        try {
+            f.send = { WebhookResult.Success(parseResponseBody("""{"status":"needs_confirmation","responseText":"Not the question","conversationId":"backend-thread","clarification":{"token":"opaque+/=","question":"Which time?"}}""")) }
+            f.machine.startConversation()
+            f.capture.state.value = CaptureState.Finished("Book it")
+            assertEquals(listOf("Which time?"), f.tts.spoken)
+            assertEquals(1, f.capture.starts)
+            val first = f.metadata.single()
+            assertEquals(first.requestId, f.rows.single().sessionId)
+            assertEquals("backend-thread", f.rows.single().conversationId)
+            assertEquals("needs_confirmation", f.rows.single().status)
+            assertEquals("opaque+/=", responseMetadata(f.rows.single().responseMetadata).clarification?.token)
+            f.tts.state.value = TtsState.Done(f.tts.id)
+            assertEquals(ConvoState.Listening, f.machine.state.value)
+            f.send = { WebhookResult.Success(parseResponseBody("""{"status":"needs_confirmation","conversationId":"backend-thread-2","clarification":{"token":"rotated","question":"Which calendar?"}}""")) }
+            f.capture.state.value = CaptureState.Finished("Noon")
+            val second = f.metadata.last()
+            assertNotEquals(first.requestId, second.requestId)
+            assertEquals(first.requestId, second.inReplyTo)
+            assertEquals("backend-thread", second.conversationId)
+            assertEquals("opaque+/=", second.contextToken)
+            assertEquals(second.requestId, f.rows.last().sessionId)
+            assertEquals(second.inReplyTo, f.rows.last().inReplyTo)
+            assertEquals(second.contextToken, f.rows.last().contextToken)
+            assertEquals(second.capturedAt, f.rows.last().timestamp)
+            // Interrupting the question must retain its newly returned context.
+            f.machine.bargeIn()
+            f.send = { WebhookResult.Success(parseResponseBody("""{"status":"completed","responseText":"Booked"}""")) }
+            f.capture.state.value = CaptureState.Finished("Work")
+            val third = f.metadata.last()
+            assertEquals(second.requestId, third.inReplyTo)
+            assertEquals("backend-thread-2", third.conversationId)
+            assertEquals("rotated", third.contextToken)
+            f.tts.state.value = TtsState.Done(f.tts.id)
+            f.capture.state.value = CaptureState.Finished("Another question")
+            assertNull(f.metadata.last().contextToken)
+            assertEquals(third.requestId, f.metadata.last().inReplyTo)
+            assertEquals(f.metadata.size, f.metadata.map { it.requestId }.distinct().size)
+            assertEquals(1, f.requests.map { it.second }.distinct().size)
+            f.machine.startConversation()
+            f.capture.state.value = CaptureState.Finished("Fresh conversation")
+            assertNull(f.metadata.last().contextToken)
+            assertNull(f.metadata.last().inReplyTo)
+            assertEquals(f.requests.last().second, f.metadata.last().conversationId)
+        } finally { f.scope.cancel() }
+    }
+
+    @Test fun clarificationMetadataCannotOverrideAcceptedOrFailedStatus() {
+        for (status in listOf("accepted", "failed")) {
+            val f = Fixture()
+            try {
+                f.send = { WebhookResult.Success(parseResponseBody("""{"status":"$status","responseText":"Done","clarification":{"token":"opaque","question":"Confirm?"}}""")) }
+                f.machine.startConversation()
+                f.capture.state.value = CaptureState.Finished("request")
+                assertEquals(status, f.rows.single().status)
+                assertEquals(f.metadata.single().requestId, f.rows.single().sessionId)
+                assertTrue(f.tts.spoken.isEmpty())
+                assertTrue(f.machine.state.value is ConvoState.Error)
+                assertEquals(1, f.capture.starts)
+            } finally { f.scope.cancel() }
+        }
     }
 
     @Test fun staleReplayAndWrongUtteranceCannotAdvanceTurn() {

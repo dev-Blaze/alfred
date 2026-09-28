@@ -7,9 +7,11 @@ import com.yshah.alfred.capture.TtsController
 import com.yshah.alfred.capture.TtsState
 import com.yshah.alfred.data.InteractionDao
 import com.yshah.alfred.data.InteractionEntity
+import com.yshah.alfred.network.storedMetadata
 import com.yshah.alfred.network.WebhookClient
 import com.yshah.alfred.network.WebhookResult
 import com.yshah.alfred.network.WebhookOutcome
+import com.yshah.alfred.network.WebhookRequestMetadata
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.CoroutineScope
@@ -66,12 +68,18 @@ class ConvoStateMachine internal constructor(
     val state: StateFlow<ConvoState> = _state
 
     private var sessionId: String = UUID.randomUUID().toString()
+    private var conversationId: String = sessionId
+    private var inReplyTo: String? = null
+    private var contextToken: String? = null
     private var consecutiveErrors = 0
     private var conversationJob: Job? = null
 
     fun startConversation() {
         cancelTurn()
         sessionId = UUID.randomUUID().toString()
+        conversationId = sessionId
+        inReplyTo = null
+        contextToken = null
         consecutiveErrors = 0
         listen()
     }
@@ -118,10 +126,12 @@ class ConvoStateMachine internal constructor(
                     val text = capture.finalText
                     if (text.isBlank()) continue
                     _state.value = ConvoState.Sending
-                    val result = webhookClient.sendConvoTurn(text, currentSessionId)
+                    val metadata = WebhookRequestMetadata(conversationId = conversationId,
+                        inReplyTo = inReplyTo, contextToken = contextToken)
+                    val result = webhookClient.sendConvoTurn(text, currentSessionId, metadata)
                     currentCoroutineContext().ensureActive()
                     try {
-                        recordTurn(text, result, currentSessionId)
+                        recordTurn(text, result, metadata)
                     } catch (e: CancellationException) { throw e
                     } catch (_: Exception) {
                         _state.value = ConvoState.Error("Reply received, but history could not be saved. Check device storage. Retry starts a new conversation.")
@@ -130,8 +140,15 @@ class ConvoStateMachine internal constructor(
                     currentCoroutineContext().ensureActive()
                     if (result is WebhookResult.Success) {
                         val response = result.response
+                        conversationId = response.conversationId ?: conversationId
+                        inReplyTo = metadata.requestId
+                        contextToken = response.clarification?.token
+                            ?.takeIf { response.outcome == WebhookOutcome.NEEDS_CONFIRMATION }
+                        val clarificationQuestion = response.clarification?.question
+                            ?.takeIf { response.outcome == WebhookOutcome.NEEDS_CONFIRMATION }
                         legacyReply = response.outcome == WebhookOutcome.UNKNOWN && response.isLegacyResponse
-                        if ((!legacyReply && response.outcome != WebhookOutcome.COMPLETED) || response.responseText.isNullOrBlank()) {
+                        if (clarificationQuestion == null &&
+                            ((!legacyReply && response.outcome != WebhookOutcome.COMPLETED) || response.responseText.isNullOrBlank())) {
                             _state.value = ConvoState.Error(when (response.outcome) {
                                 WebhookOutcome.ACCEPTED -> "Request accepted, but no completed reply was returned."
                                 WebhookOutcome.FAILED -> "The request failed. Check history for details."
@@ -141,7 +158,7 @@ class ConvoStateMachine internal constructor(
                             return@launch
                         }
                         consecutiveErrors = 0
-                        response.responseText
+                        clarificationQuestion ?: response.responseText
                     } else null
                 } else null
                 if (reply == null) {
@@ -165,11 +182,10 @@ class ConvoStateMachine internal constructor(
     }
 
     /**
-     * Each convo turn gets its own history row keyed by a fresh UUID — the conversation's
-     * [sessionId] stays constant across turns (for n8n correlation) so it can't double as the
-     * row's primary key without later turns overwriting earlier ones.
+     * History uses the exact outbound request ID; session and backend conversation IDs
+     * group turns without overwriting earlier requests.
      */
-    private suspend fun recordTurn(requestText: String, result: WebhookResult, conversationId: String) {
+    private suspend fun recordTurn(requestText: String, result: WebhookResult, metadata: WebhookRequestMetadata) {
         val (status, responseText) = when (result) {
             is WebhookResult.Success -> (if (result.response.outcome == WebhookOutcome.UNKNOWN && result.response.isLegacyResponse)
                 "delivered" else result.response.outcome.name.lowercase()) to (result.response.responseText ?: result.response.message)
@@ -179,19 +195,22 @@ class ConvoStateMachine internal constructor(
         }
         interactionDao.upsert(
             InteractionEntity(
-                sessionId = UUID.randomUUID().toString(),
+                sessionId = metadata.requestId,
                 type = "convo",
                 requestText = requestText,
-                timestamp = System.currentTimeMillis(),
+                timestamp = metadata.capturedAt,
                 status = status,
                 responseText = responseText,
-                conversationId = conversationId,
+                responseMetadata = (result as? WebhookResult.Success)?.response?.storedMetadata(),
+                conversationId = (result as? WebhookResult.Success)?.response?.conversationId ?: metadata.conversationId,
+                inReplyTo = metadata.inReplyTo,
+                contextToken = metadata.contextToken,
                 httpCode = when (result) {
                     is WebhookResult.Success -> result.httpCode
                     is WebhookResult.HttpError -> result.code
                     else -> null
                 },
-                timeZone = java.time.ZoneId.systemDefault().id,
+                timeZone = metadata.timeZone,
             ),
         )
     }

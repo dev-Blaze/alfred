@@ -28,7 +28,9 @@ interface WebhookClient {
     suspend fun sendTaskOrNote(text: String, type: String, sessionId: String): WebhookResult
     suspend fun sendTaskOrNote(text: String, type: String, sessionId: String, metadata: WebhookRequestMetadata): WebhookResult =
         sendTaskOrNote(text, type, sessionId)
-    suspend fun sendConvoTurn(text: String, sessionId: String): WebhookResult
+    suspend fun sendConvoTurn(text: String, sessionId: String): WebhookResult =
+        sendConvoTurn(text, sessionId, WebhookRequestMetadata(conversationId = sessionId))
+    suspend fun sendConvoTurn(text: String, sessionId: String, metadata: WebhookRequestMetadata): WebhookResult
     suspend fun testConnection(): ConnectionTestResult
     suspend fun testConnection(settings: WebhookSettings): ConnectionTestResult =
         ConnectionTestResult.Failure("Draft connection testing is not supported by this client")
@@ -55,9 +57,8 @@ class RetrofitWebhookClient(
             send(settingsStore.currentSettingsSnapshot(), clientFactory.longRunningClient, text, type, sessionId, metadata)
         }
 
-    override suspend fun sendConvoTurn(text: String, sessionId: String): WebhookResult = executeCall {
-        send(settingsStore.currentSettingsSnapshot(), clientFactory.convoClient, text, "convo", sessionId,
-            WebhookRequestMetadata(conversationId = sessionId))
+    override suspend fun sendConvoTurn(text: String, sessionId: String, metadata: WebhookRequestMetadata): WebhookResult = executeCall {
+        send(settingsStore.currentSettingsSnapshot(), clientFactory.convoClient, text, "convo", sessionId, metadata)
     }
 
     private suspend fun send(settings: WebhookSettings, client: OkHttpClient, text: String, type: String,
@@ -67,7 +68,8 @@ class RetrofitWebhookClient(
         require(type == "ping" || (text.isNotBlank() && text.length <= 50_000)) { "Invalid capture text" }
         require(sessionId.matches(Regex("[A-Za-z0-9_-]{1,128}"))) { "Invalid session ID" }
         val payload = WebhookJsonPayload(type, text, Instant.ofEpochMilli(metadata.capturedAt).toString(), sessionId,
-            metadata.capturedAt, metadata.timeZone, metadata.source, metadata.requestId, metadata.conversationId, metadata.schemaVersion)
+            metadata.capturedAt, metadata.timeZone, metadata.source, metadata.requestId, metadata.conversationId, metadata.schemaVersion,
+            metadata.inReplyTo, metadata.contextToken)
         return apiFor(client).sendJson(settings.webhookUrl, payload, headers)
     }
 
@@ -148,10 +150,28 @@ internal fun parseResponseBody(body: String): WebhookResponseBody {
     val text = listOf("responseText", "output", "text", "response", "message", "reply")
         .firstNotNullOfOrNull { (obj?.get(it) as? JsonPrimitive)?.takeIf { value -> value.isString }?.content }
         ?: (element as? JsonPrimitive)?.takeIf { it.isString }?.content
-    return WebhookResponseBody(responseText = text, status = status,
-        message = if (text == null) body else null, outcome = outcome,
-        isLegacyResponse = status == null && error == null && obj?.get("success") != JsonPrimitive(false))
+    val response = WebhookResponseBody(responseText = text, status = status,
+        outcome = outcome,
+        isLegacyResponse = status == null && error == null && obj?.get("success") != JsonPrimitive(false),
+        receipt = (obj?.get("receipt") as? JsonObject)?.let { receipt ->
+            receipt.boundedString("action", 128)?.let { action ->
+                ActionReceipt(action, receipt.boundedString("externalId", 512), safeReceiptUrl(receipt.boundedString("url", 2048)))
+            }
+        },
+        clarification = (obj?.get("clarification") as? JsonObject)?.let { clarification ->
+            val token = clarification.boundedString("token", 2048)?.takeIf(::validOpaqueToken)
+            val question = clarification.boundedString("question", 4000)
+            if (token != null && question != null) Clarification(token, question) else null
+        },
+        conversationId = obj?.boundedString("conversationId", 128)?.takeIf(::validCorrelationId))
+    return response.copy(message = if (text == null) {
+        if (error != null) body else response.clarification?.question ?: response.receipt?.action ?: body
+    } else null)
 }
+
+private fun JsonObject.boundedString(key: String, max: Int): String? =
+    (get(key) as? JsonPrimitive)?.takeIf { it.isString }?.content
+        ?.takeIf { it.isNotBlank() && it.length <= max && it.none { char -> char.isISOControl() && char != '\n' && char != '\t' } }
 
 // Contract: {"type":"pong","schemaVersion":1,"capabilities":["task","note","convo"]}.
 internal fun validateCapabilityPing(body: String, code: Int): ConnectionTestResult {

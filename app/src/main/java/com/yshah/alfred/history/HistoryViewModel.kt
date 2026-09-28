@@ -34,6 +34,18 @@ class HistoryViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val message = MutableStateFlow<String?>(null)
     val busy = MutableStateFlow(false)
+    val replySaved = MutableStateFlow<String?>(null)
+
+    private var replyDraft: com.yshah.alfred.data.DeliveryEntity? = null
+
+    fun reply(original: InteractionEntity, text: String) = perform {
+        val item = replyDraft?.takeIf { it.inReplyTo == original.sessionId && it.text == text.trim() }
+            ?: com.yshah.alfred.webhook.followUp(original, text).also { replyDraft = it }
+        DeliveryQueue.enqueue(context, item)
+        replySaved.value = original.sessionId
+        replyDraft = null
+        "Follow-up queued as a new request"
+    }
 
     fun retry(id: String) = perform {
         DeliveryQueue.retry(context, id, acknowledgePossibleDuplicate = true)
@@ -53,6 +65,9 @@ class HistoryViewModel @Inject constructor(
                 put("type", item.type); put("text", item.requestText); put("capturedAt", item.timestamp)
                 put("timeZone", item.timeZone); put("source", item.source); put("status", item.status)
                 put("httpCode", item.httpCode ?: JSONObject.NULL); put("response", item.responseText ?: JSONObject.NULL)
+                put("inReplyTo", item.inReplyTo ?: JSONObject.NULL)
+                put("contextToken", item.contextToken ?: JSONObject.NULL)
+                put("responseMetadata", item.responseMetadata?.let(::JSONObject) ?: JSONObject.NULL)
             })
         }
         checkNotNull(context.contentResolver.openOutputStream(uri, "wt")) { "Cannot open export file" }
