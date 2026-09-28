@@ -10,7 +10,7 @@
 - Schema source: [alfred-ledger.sql](alfred-ledger.sql).
 - Model: user-selected **Deepseek V4.1 Flash**, without Gemini fallback.
 
-Published version: `29c1398f-3d62-4ca6-8026-7a2e71f73429`.
+Published version: `fe408247-738a-4737-955b-863111d64cc8` (0.3.4 workouts).
 The **Calendar policy** node now targets `yashesh.s.1997@gmail.com`.
 For future main-workflow write tests, set the draft policy to **Alfred Test**
 before testing and restore the primary target before publishing. The separate
@@ -67,7 +67,22 @@ because of the mode-string assumption. Exact-event ETag-guarded cleanup returned
 204 in execution 158. Fixed server-side test calendar selection replaced that
 assumption. All temporary events created during these checks were deleted.
 
-## Operational limits
+## Structured workouts (0.3.4)
+
+Say: “Log my workout: bench press, three sets of eight at 60 kg, 40 minutes.”
+Use History **Correct** on the latest receipt to change a value. Reply to missing
+detail questions with the requested units or quantities. Completed logs do not
+require calendar-style approval because they record performed activity rather
+than scheduling provider mutations.
+
+`alfred.workouts` stores current structured data; `alfred.workout_revisions`
+preserves each revision. `alfred.save_workout` commits the revision and request
+receipt atomically. See [schema](alfred-workouts.sql) and
+[verification/limits](../RELEASE_NOTES_0.3.4.md). Requests are deduplicated by the
+existing ledger. Corrections are bound to prior receipts and their revision.
+No workout records are written to Google Calendar or Outline by this route.
+
+## Shared operational limits
 
 - No app polling/push endpoint: accepted results do not automatically refresh.
 - No scheduled reconciliation worker. Same-ID retry reconciles recorded calendar
