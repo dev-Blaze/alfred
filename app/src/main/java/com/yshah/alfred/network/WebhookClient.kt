@@ -68,10 +68,12 @@ class RetrofitWebhookClient(
         metadata.validate()
         require(type == "ping" || (text.isNotBlank() && text.length <= 50_000)) { "Invalid capture text" }
         require(sessionId.matches(Regex("[A-Za-z0-9_-]{1,128}"))) { "Invalid session ID" }
-        val payload = WebhookJsonPayload(type, text, Instant.ofEpochMilli(metadata.capturedAt).toString(), sessionId,
+        val hint = if (type == "ping") null else intentClassifier?.classify(text, metadata.inReplyTo != null)
+        val routedType = if (type == "convo") automaticCaptureType(hint) else type
+        val payload = WebhookJsonPayload(routedType, text, Instant.ofEpochMilli(metadata.capturedAt).toString(), sessionId,
             metadata.capturedAt, metadata.timeZone, metadata.source, metadata.requestId, metadata.conversationId, metadata.schemaVersion,
             metadata.inReplyTo, metadata.contextToken,
-            if (type == "ping") null else intentClassifier?.classify(text, metadata.inReplyTo != null))
+            hint)
         return apiFor(client).sendJson(settings.webhookUrl, payload, headers)
     }
 
@@ -104,6 +106,12 @@ class RetrofitWebhookClient(
 }
 
 internal const val MAX_RESPONSE_BYTES = 1_048_576L
+
+internal fun automaticCaptureType(hint: String?): String = when (hint) {
+    "action" -> "task"
+    "capture" -> "note"
+    else -> "convo" // Questions, mixed intents and uncertain follow-ups retain dialogue context.
+}
 
 internal fun ResponseBody.readBounded(): String = use {
     val source = source()

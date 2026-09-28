@@ -71,12 +71,19 @@ class IntentClassifier(context: Context) {
                             val max = scores.max()
                             val probabilities = scores.map { exp(it - max) }
                             val best = scores.indices.maxBy { scores[it] }
-                            if (probabilities[best] / probabilities.sum() < head.getDouble("threshold")) "uncertain"
+                            android.util.Log.d("AlfredClassifier", "label=${head.getJSONArray("labels").getString(best)} score=${probabilities[best] / probabilities.sum()}")
+                            // ponytail: uncalibrated seed head; require separation until a larger held-out corpus is available.
+                            val total = probabilities.sum()
+                            val runnerUp = probabilities.indices.filter { it != best }.maxOf { probabilities[it] }
+                            if (probabilities[best] / total < 0.40 || (probabilities[best] - runnerUp) / total < 0.10) "uncertain"
                             else head.getJSONArray("labels").getString(best)
                         }
                     }
                 }
             }
-        } catch (_: Exception) { "uncertain" }
+        } catch (e: Exception) {
+            android.util.Log.w("AlfredClassifier", "Local inference unavailable", e)
+            "uncertain"
+        }
     }
 }

@@ -22,14 +22,15 @@ val keystoreProperties = Properties().apply {
 android {
     namespace = "com.yshah.alfred"
     compileSdk = 36
+    testBuildType = "release"
 
     defaultConfig {
         applicationId = "com.yshah.alfred"
         minSdk = 34
         targetSdk = 36
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        versionCode = 12
-        versionName = "0.3.6"
+        versionCode = 13
+        versionName = "0.3.7"
     }
 
     buildFeatures {

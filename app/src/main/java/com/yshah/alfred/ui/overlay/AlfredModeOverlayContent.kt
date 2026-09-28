@@ -31,7 +31,6 @@ import com.yshah.alfred.assistant.AssistantMode
 import com.yshah.alfred.capture.CaptureState
 import com.yshah.alfred.convo.ConvoState
 import com.yshah.alfred.ui.components.ListeningIndicator
-import com.yshah.alfred.ui.components.ModeSwitcher
 
 @Composable
 fun AlfredModeOverlayContent(
@@ -61,7 +60,7 @@ fun AlfredModeOverlayContent(
             }
         }
         Spacer(modifier = Modifier.height(12.dp))
-        ModeSwitcher(activeMode = activeMode, onModeSelected = onModeSelected, modifier = Modifier.fillMaxWidth())
+        Text("Alfred", style = MaterialTheme.typography.titleLarge)
         Spacer(modifier = Modifier.height(20.dp))
         if (draftText != null) {
             OutlinedTextField(value = draftText, onValueChange = onDraftChanged,
@@ -132,7 +131,7 @@ private fun ConvoModeContent(
     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
         when (convoState) {
             is ConvoState.Idle, is ConvoState.Ended -> {
-                Text("Tap to start a conversation", style = MaterialTheme.typography.bodyLarge)
+                Text("Ask a question or say what you need", style = MaterialTheme.typography.bodyLarge)
                 Spacer(modifier = Modifier.height(12.dp))
                 MicButton(onClick = onMicTapped)
             }

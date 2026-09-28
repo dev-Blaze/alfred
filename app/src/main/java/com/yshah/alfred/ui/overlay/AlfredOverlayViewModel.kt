@@ -26,7 +26,7 @@ import javax.inject.Inject
 private const val NO_WEBHOOK_MESSAGE = "Set a webhook URL in Settings first"
 
 data class OverlayUiState(
-    val activeMode: AssistantMode = AssistantMode.TASK,
+    val activeMode: AssistantMode = AssistantMode.CONVO,
     val captureState: CaptureState = CaptureState.Idle,
     val convoState: ConvoState = ConvoState.Idle,
     val shouldDismiss: Boolean = false,
@@ -48,12 +48,6 @@ class AlfredOverlayViewModel @Inject constructor(
     val uiState: StateFlow<OverlayUiState> = _uiState.asStateFlow()
 
     init {
-        viewModelScope.launch {
-            try {
-                _uiState.value = _uiState.value.copy(activeMode = modePreferences.lastMode.first())
-            } catch (e: CancellationException) { throw e
-            } catch (_: Exception) { /* The default mode remains usable. */ }
-        }
         viewModelScope.launch {
             speechCaptureController.state.collect { captureState ->
                 // Convo mode drives this same controller through ConvoStateMachine instead.

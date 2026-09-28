@@ -222,7 +222,7 @@ class ConvoStateMachine internal constructor(
         currentCoroutineContext().ensureActive()
         _state.value = ConvoState.Speaking(if (legacyReply) "$text\n\nLegacy reply — action outcome not verified." else text)
         val utteranceId = UUID.randomUUID().toString()
-        ttsController.speak(text, utteranceId)
+        ttsController.speak(spokenReply(text), utteranceId)
         val terminal = withTimeoutOrNull( maxOf(30_000L, text.length * 150L)) { ttsController.state.first {
             when (it) {
                 is TtsState.Done -> it.utteranceId == utteranceId
